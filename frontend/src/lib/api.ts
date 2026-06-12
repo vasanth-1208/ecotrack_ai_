@@ -73,8 +73,8 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       }),
-    demo: () =>
-      apiRequest('/auth/demo', {
+    upgrade: () =>
+      apiRequest('/auth/upgrade', {
         method: 'POST',
       }),
     me: () => apiRequest('/auth/me'),

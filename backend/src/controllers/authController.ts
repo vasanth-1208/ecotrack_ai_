@@ -58,6 +58,7 @@ export class AuthController {
           level: created.level,
           streakDays: created.streakDays,
           carbonBudget: created.carbonBudget,
+          isPremium: created.isPremium || false
         },
       });
     } catch (err: any) {
@@ -117,6 +118,7 @@ export class AuthController {
           level: expectedLevel,
           streakDays: newStreak,
           carbonBudget: user.carbonBudget,
+          isPremium: user.isPremium || false
         },
       });
     } catch (err: any) {
@@ -147,6 +149,7 @@ export class AuthController {
           streakDays: user.streakDays,
           carbonBudget: user.carbonBudget,
           createdAt: user.createdAt,
+          isPremium: user.isPremium || false
         },
       });
     } catch (err: any) {
@@ -169,6 +172,21 @@ export class AuthController {
     } catch (err: any) {
       console.error('Update Budget Error:', err);
       return res.status(500).json({ error: 'Failed to update carbon budget.' });
+    }
+  }
+
+  public static async upgradePremium(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      await dbClient.updateUserPremiumStatus(userId, true);
+      return res.status(200).json({ message: 'Upgraded to Premium successfully', isPremium: true });
+    } catch (err: any) {
+      console.error('Upgrade Premium Error:', err);
+      return res.status(500).json({ error: 'Failed to upgrade to premium.' });
     }
   }
 

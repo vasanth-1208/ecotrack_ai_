@@ -8,7 +8,7 @@ import { removeAuthToken, api } from '../lib/api';
 export const Navbar: React.FC = () => {
   const pathname = usePathname();
   const router = useRouter();
-  const [userStats, setUserStats] = React.useState<{ points: number; level: number; fullName: string } | null>(null);
+  const [userStats, setUserStats] = React.useState<{ points: number; level: number; fullName: string; isPremium: boolean } | null>(null);
 
   // Load user profile statistics dynamically on mount/pathname change
   React.useEffect(() => {
@@ -19,13 +19,33 @@ export const Navbar: React.FC = () => {
         setUserStats({
           points: res.user.points,
           level: res.user.level,
-          fullName: res.user.fullName
+          fullName: res.user.fullName,
+          isPremium: !!res.user.isPremium
         });
       })
       .catch(() => {
         // user unauthorized
       });
   }, [pathname]);
+
+  const handleUpgrade = async () => {
+    try {
+      const res = await api.auth.upgrade();
+      if (res.isPremium) {
+        setUserStats(prev => prev ? { ...prev, isPremium: true } : null);
+        if (typeof window !== 'undefined') {
+          const confetti = (await import('canvas-confetti')).default;
+          confetti({
+            particleCount: 150,
+            spread: 80,
+            origin: { y: 0.6 }
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Failed to upgrade to premium:', err);
+    }
+  };
 
   if (pathname === '/auth') return null;
 
@@ -76,13 +96,29 @@ export const Navbar: React.FC = () => {
           </div>
 
           {/* Right Side Statistics & Logout */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             {userStats && (
-              <div className="flex items-center gap-2 bg-emerald-900/80 px-3 py-1.5 rounded-lg border border-emerald-800 text-xs sm:text-sm shadow-sm">
-                <span className="font-bold text-emerald-400">Lvl {userStats.level}</span>
-                <span className="text-slate-400">|</span>
-                <span className="font-bold text-amber-400">⭐ {userStats.points} pts</span>
-              </div>
+              <>
+                {userStats.isPremium ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-black bg-gradient-to-r from-amber-500 to-yellow-400 text-amber-950 border border-yellow-300 shadow animate-pulse">
+                    👑 PREMIUM
+                  </span>
+                ) : (
+                  <button
+                    onClick={handleUpgrade}
+                    className="py-1.5 px-2.5 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 active:from-amber-700 active:to-yellow-700 text-amber-950 font-black text-xs rounded-lg border border-yellow-400 transition-all shadow-md focus:outline-none focus:ring-2 focus:ring-yellow-400"
+                    title="Upgrade your account to Premium"
+                  >
+                    ⭐ Upgrade
+                  </button>
+                )}
+
+                <div className="flex items-center gap-2 bg-emerald-900/80 px-3 py-1.5 rounded-lg border border-emerald-800 text-xs sm:text-sm shadow-sm">
+                  <span className="font-bold text-emerald-400">Lvl {userStats.level}</span>
+                  <span className="text-slate-400">|</span>
+                  <span className="font-bold text-amber-400">⭐ {userStats.points} pts</span>
+                </div>
+              </>
             )}
 
             <button

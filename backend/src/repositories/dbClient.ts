@@ -97,7 +97,8 @@ class DatabaseClient {
         streak_days INTEGER DEFAULT 0,
         last_active_date VARCHAR(10),
         carbon_budget INTEGER DEFAULT 400,
-        created_at VARCHAR(30) NOT NULL
+        created_at VARCHAR(30) NOT NULL,
+        is_premium BOOLEAN DEFAULT FALSE
       );
 
       CREATE TABLE IF NOT EXISTS footprints (
@@ -164,6 +165,8 @@ class DatabaseClient {
 
     try {
       await this.pool.query(query);
+      // Safe schema migration: add is_premium column if it does not already exist
+      await this.pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_premium BOOLEAN DEFAULT FALSE;');
       console.log('⚡ PostgreSQL Database schema verified/created successfully.');
     } catch (err) {
       console.error('❌ Error executing database initialization schema:', err);
@@ -180,10 +183,10 @@ class DatabaseClient {
 
   public async createUser(user: User): Promise<User> {
     if (this.usePostgres && this.pool) {
-      const q = `INSERT INTO users (id, email, password_hash, full_name, points, level, streak_days, last_active_date, carbon_budget, created_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`;
+      const q = `INSERT INTO users (id, email, password_hash, full_name, points, level, streak_days, last_active_date, carbon_budget, created_at, is_premium)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`;
       const res = await this.pool.query(q, [
-        user.id, user.email, user.passwordHash, user.fullName, user.points, user.level, user.streakDays, user.lastActiveDate, user.carbonBudget, user.createdAt
+        user.id, user.email, user.passwordHash, user.fullName, user.points, user.level, user.streakDays, user.lastActiveDate, user.carbonBudget, user.createdAt, user.isPremium || false
       ]);
       const row = res.rows[0];
       return {
@@ -196,13 +199,16 @@ class DatabaseClient {
         streakDays: row.streak_days,
         lastActiveDate: row.last_active_date,
         carbonBudget: row.carbon_budget,
-        createdAt: row.created_at
+        createdAt: row.created_at,
+        isPremium: !!row.is_premium
       };
     } else {
       const db = this.readJsonDb();
-      db.users.push(user);
+      // Ensure local state default for new user
+      const localUser = { ...user, isPremium: user.isPremium || false };
+      db.users.push(localUser);
       this.writeJsonDb(db);
-      return user;
+      return localUser;
     }
   }
 
@@ -221,11 +227,16 @@ class DatabaseClient {
         streakDays: row.streak_days,
         lastActiveDate: row.last_active_date,
         carbonBudget: row.carbon_budget,
-        createdAt: row.created_at
+        createdAt: row.created_at,
+        isPremium: !!row.is_premium
       };
     } else {
       const db = this.readJsonDb();
-      return db.users.find(u => u.email.toLowerCase() === email.toLowerCase()) || null;
+      const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase()) || null;
+      if (user && user.isPremium === undefined) {
+        user.isPremium = false;
+      }
+      return user;
     }
   }
 
@@ -244,11 +255,16 @@ class DatabaseClient {
         streakDays: row.streak_days,
         lastActiveDate: row.last_active_date,
         carbonBudget: row.carbon_budget,
-        createdAt: row.created_at
+        createdAt: row.created_at,
+        isPremium: !!row.is_premium
       };
     } else {
       const db = this.readJsonDb();
-      return db.users.find(u => u.id === id) || null;
+      const user = db.users.find(u => u.id === id) || null;
+      if (user && user.isPremium === undefined) {
+        user.isPremium = false;
+      }
+      return user;
     }
   }
 
@@ -297,11 +313,25 @@ class DatabaseClient {
         streakDays: row.streak_days,
         lastActiveDate: row.last_active_date,
         carbonBudget: row.carbon_budget,
-        createdAt: row.created_at
+        createdAt: row.created_at,
+        isPremium: !!row.is_premium
       }));
     } else {
       const db = this.readJsonDb();
-      return [...db.users].sort((a, b) => b.points - a.points);
+      return [...db.users].map(u => ({ ...u, isPremium: u.isPremium || false })).sort((a, b) => b.points - a.points);
+    }
+  }
+
+  public async updateUserPremiumStatus(id: string, isPremium: boolean): Promise<void> {
+    if (this.usePostgres && this.pool) {
+      await this.pool.query('UPDATE users SET is_premium = $1 WHERE id = $2', [isPremium, id]);
+    } else {
+      const db = this.readJsonDb();
+      const user = db.users.find(u => u.id === id);
+      if (user) {
+        user.isPremium = isPremium;
+        this.writeJsonDb(db);
+      }
     }
   }
 

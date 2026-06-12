@@ -9,6 +9,7 @@ export interface User {
   lastActiveDate: string | null;
   carbonBudget: number; // monthly budget in kg CO2
   createdAt: string;
+  isPremium?: boolean;
 }
 
 export interface FootprintInput {

@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+@theme {
+  --color-slate-850: #131d30;
+  --color-slate-750: #1f2c42;
+  --color-slate-350: #cbd5e1;
+  --color-slate-450: #94a3b8;
+  --color-emerald-550: #059669;
+}
+
 /* Accessibility Font Adjustments */
 .dyslexia-font {
   font-family: "Comic Neue", "Comic Sans MS", "Chalkboard SE", sans-serif !important;
