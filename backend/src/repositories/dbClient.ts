@@ -35,6 +35,7 @@ class DatabaseClient {
   private pool: Pool | null = null;
   private usePostgres = false;
   private schemaInitialized = false;
+  private initPromise: Promise<void> | null = null;
 
   // MongoDB properties
   private mongoClient: MongoClient | null = null;
@@ -116,149 +117,162 @@ class DatabaseClient {
   }
 
   // Initialize DB tables for PostgreSQL or Collections/Indexes for MongoDB
-  public async initDbSchema() {
-    if (this.useMongo && this.mongoClient) {
-      const client = this.mongoClient;
+  public async initDbSchema(): Promise<void> {
+    if (this.schemaInitialized) return;
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    this.initPromise = (async () => {
+      if (this.useMongo && this.mongoClient) {
+        const client = this.mongoClient;
+        let retries = 5;
+        while (retries > 0) {
+          try {
+            await client.connect();
+            const db = client.db();
+            this.mongoDb = db;
+            
+            // Create collections indexes
+            await db.collection('users').createIndex({ id: 1 }, { unique: true });
+            await db.collection('users').createIndex({ email: 1 }, { unique: true });
+            await db.collection('footprints').createIndex({ id: 1 }, { unique: true });
+            await db.collection('footprints').createIndex({ userId: 1 });
+            await db.collection('goals').createIndex({ id: 1 }, { unique: true });
+            await db.collection('goals').createIndex({ userId: 1 });
+            await db.collection('badges').createIndex({ id: 1 }, { unique: true });
+            await db.collection('badges').createIndex({ userId: 1 });
+            await db.collection('user_challenges').createIndex({ id: 1 }, { unique: true });
+            await db.collection('user_challenges').createIndex({ userId: 1 });
+            await db.collection('quiz_progress').createIndex({ userId: 1, quizId: 1 }, { unique: true });
+            await db.collection('read_progress').createIndex({ userId: 1, articleId: 1 }, { unique: true });
+            
+            console.log('⚡ MongoDB Database connected and indexes verified successfully.');
+            this.schemaInitialized = true;
+            return;
+          } catch (err) {
+            retries -= 1;
+            console.warn(`⚠️ MongoDB connection attempt failed. Retries remaining: ${retries}. Error:`, err);
+            if (retries === 0) {
+              console.error('❌ All MongoDB initialization retries failed. Falling back to local JSON database...');
+              this.useMongo = false;
+              this.mongoClient = null;
+              this.initJsonDb();
+            } else {
+              await new Promise(resolve => setTimeout(resolve, 3000));
+            }
+          }
+        }
+        return;
+      }
+
+      if (!this.usePostgres || !this.pool) return;
+      const pool = this.pool;
+
+      const query = `
+        CREATE TABLE IF NOT EXISTS users (
+          id VARCHAR(36) PRIMARY KEY,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          password_hash VARCHAR(255) NOT NULL,
+          full_name VARCHAR(255) NOT NULL,
+          points INTEGER DEFAULT 0,
+          level INTEGER DEFAULT 1,
+          streak_days INTEGER DEFAULT 0,
+          last_active_date VARCHAR(10),
+          carbon_budget INTEGER DEFAULT 400,
+          created_at VARCHAR(30) NOT NULL,
+          is_premium BOOLEAN DEFAULT FALSE
+        );
+
+        CREATE TABLE IF NOT EXISTS footprints (
+          id VARCHAR(36) PRIMARY KEY,
+          user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE,
+          date VARCHAR(7) NOT NULL,
+          inputs JSONB NOT NULL,
+          transport_emissions DECIMAL NOT NULL,
+          energy_emissions DECIMAL NOT NULL,
+          food_emissions DECIMAL NOT NULL,
+          shopping_emissions DECIMAL NOT NULL,
+          waste_emissions DECIMAL NOT NULL,
+          total_emissions DECIMAL NOT NULL,
+          created_at VARCHAR(30) NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS goals (
+          id VARCHAR(36) PRIMARY KEY,
+          user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE,
+          title VARCHAR(255) NOT NULL,
+          category VARCHAR(50) NOT NULL,
+          target_value DECIMAL NOT NULL,
+          current_value DECIMAL NOT NULL,
+          start_date VARCHAR(10) NOT NULL,
+          target_date VARCHAR(10) NOT NULL,
+          status VARCHAR(20) NOT NULL,
+          created_at VARCHAR(30) NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS badges (
+          id VARCHAR(36) PRIMARY KEY,
+          user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE,
+          badge_type VARCHAR(50) NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          description TEXT NOT NULL,
+          earned_at VARCHAR(30) NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS user_challenges (
+          id VARCHAR(36) PRIMARY KEY,
+          user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE,
+          challenge_id VARCHAR(50) NOT NULL,
+          status VARCHAR(20) NOT NULL,
+          progress INTEGER DEFAULT 0,
+          started_at VARCHAR(30) NOT NULL,
+          completed_at VARCHAR(30)
+        );
+
+        CREATE TABLE IF NOT EXISTS quiz_progress (
+          user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE,
+          quiz_id VARCHAR(50) NOT NULL,
+          score INTEGER NOT NULL,
+          completed_at VARCHAR(30) NOT NULL,
+          PRIMARY KEY (user_id, quiz_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS read_progress (
+          user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE,
+          article_id VARCHAR(50) NOT NULL,
+          completed_at VARCHAR(30) NOT NULL,
+          PRIMARY KEY (user_id, article_id)
+        );
+      `;
+
       let retries = 5;
       while (retries > 0) {
         try {
-          await client.connect();
-          const db = client.db();
-          this.mongoDb = db;
-          
-          // Create collections indexes
-          await db.collection('users').createIndex({ id: 1 }, { unique: true });
-          await db.collection('users').createIndex({ email: 1 }, { unique: true });
-          await db.collection('footprints').createIndex({ id: 1 }, { unique: true });
-          await db.collection('footprints').createIndex({ userId: 1 });
-          await db.collection('goals').createIndex({ id: 1 }, { unique: true });
-          await db.collection('goals').createIndex({ userId: 1 });
-          await db.collection('badges').createIndex({ id: 1 }, { unique: true });
-          await db.collection('badges').createIndex({ userId: 1 });
-          await db.collection('user_challenges').createIndex({ id: 1 }, { unique: true });
-          await db.collection('user_challenges').createIndex({ userId: 1 });
-          await db.collection('quiz_progress').createIndex({ userId: 1, quizId: 1 }, { unique: true });
-          await db.collection('read_progress').createIndex({ userId: 1, articleId: 1 }, { unique: true });
-          
-          console.log('⚡ MongoDB Database connected and indexes verified successfully.');
+          await pool.query(query);
+          await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_premium BOOLEAN DEFAULT FALSE;');
+          console.log('⚡ PostgreSQL Database schema verified/created successfully.');
           this.schemaInitialized = true;
           return;
         } catch (err) {
           retries -= 1;
-          console.warn(`⚠️ MongoDB connection attempt failed. Retries remaining: ${retries}. Error:`, err);
+          console.warn(`⚠️ PostgreSQL connection attempt failed. Retries remaining: ${retries}. Error:`, err);
           if (retries === 0) {
-            console.error('❌ All MongoDB initialization retries failed. Falling back to local JSON database...');
-            this.useMongo = false;
-            this.mongoClient = null;
+            console.error('❌ All PostgreSQL schema initialization retries failed. Falling back to local JSON database...');
+            this.usePostgres = false;
+            this.pool = null;
             this.initJsonDb();
           } else {
             await new Promise(resolve => setTimeout(resolve, 3000));
           }
         }
       }
-      return;
-    }
+    })();
 
-    if (!this.usePostgres || !this.pool || this.schemaInitialized) return;
-    const pool = this.pool;
-
-    const query = `
-      CREATE TABLE IF NOT EXISTS users (
-        id VARCHAR(36) PRIMARY KEY,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
-        full_name VARCHAR(255) NOT NULL,
-        points INTEGER DEFAULT 0,
-        level INTEGER DEFAULT 1,
-        streak_days INTEGER DEFAULT 0,
-        last_active_date VARCHAR(10),
-        carbon_budget INTEGER DEFAULT 400,
-        created_at VARCHAR(30) NOT NULL,
-        is_premium BOOLEAN DEFAULT FALSE
-      );
-
-      CREATE TABLE IF NOT EXISTS footprints (
-        id VARCHAR(36) PRIMARY KEY,
-        user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE,
-        date VARCHAR(7) NOT NULL,
-        inputs JSONB NOT NULL,
-        transport_emissions DECIMAL NOT NULL,
-        energy_emissions DECIMAL NOT NULL,
-        food_emissions DECIMAL NOT NULL,
-        shopping_emissions DECIMAL NOT NULL,
-        waste_emissions DECIMAL NOT NULL,
-        total_emissions DECIMAL NOT NULL,
-        created_at VARCHAR(30) NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS goals (
-        id VARCHAR(36) PRIMARY KEY,
-        user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE,
-        title VARCHAR(255) NOT NULL,
-        category VARCHAR(50) NOT NULL,
-        target_value DECIMAL NOT NULL,
-        current_value DECIMAL NOT NULL,
-        start_date VARCHAR(10) NOT NULL,
-        target_date VARCHAR(10) NOT NULL,
-        status VARCHAR(20) NOT NULL,
-        created_at VARCHAR(30) NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS badges (
-        id VARCHAR(36) PRIMARY KEY,
-        user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE,
-        badge_type VARCHAR(50) NOT NULL,
-        title VARCHAR(255) NOT NULL,
-        description TEXT NOT NULL,
-        earned_at VARCHAR(30) NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS user_challenges (
-        id VARCHAR(36) PRIMARY KEY,
-        user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE,
-        challenge_id VARCHAR(50) NOT NULL,
-        status VARCHAR(20) NOT NULL,
-        progress INTEGER DEFAULT 0,
-        started_at VARCHAR(30) NOT NULL,
-        completed_at VARCHAR(30)
-      );
-
-      CREATE TABLE IF NOT EXISTS quiz_progress (
-        user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE,
-        quiz_id VARCHAR(50) NOT NULL,
-        score INTEGER NOT NULL,
-        completed_at VARCHAR(30) NOT NULL,
-        PRIMARY KEY (user_id, quiz_id)
-      );
-
-      CREATE TABLE IF NOT EXISTS read_progress (
-        user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE,
-        article_id VARCHAR(50) NOT NULL,
-        completed_at VARCHAR(30) NOT NULL,
-        PRIMARY KEY (user_id, article_id)
-      );
-    `;
-
-    let retries = 5;
-    while (retries > 0) {
-      try {
-        await pool.query(query);
-        await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_premium BOOLEAN DEFAULT FALSE;');
-        console.log('⚡ PostgreSQL Database schema verified/created successfully.');
-        this.schemaInitialized = true;
-        return;
-      } catch (err) {
-        retries -= 1;
-        console.warn(`⚠️ PostgreSQL connection attempt failed. Retries remaining: ${retries}. Error:`, err);
-        if (retries === 0) {
-          console.error('❌ All PostgreSQL schema initialization retries failed. Falling back to local JSON database...');
-          this.usePostgres = false;
-          this.pool = null;
-          this.initJsonDb();
-        } else {
-          await new Promise(resolve => setTimeout(resolve, 3000));
-        }
-      }
+    try {
+      await this.initPromise;
+    } finally {
+      this.initPromise = null;
     }
   }
 
@@ -267,6 +281,7 @@ class DatabaseClient {
   // ==========================================
 
   public async createUser(user: User): Promise<User> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const doc = { ...user, isPremium: user.isPremium || false };
       await this.mongoDb.collection('users').insertOne(doc);
@@ -302,6 +317,7 @@ class DatabaseClient {
   }
 
   public async findUserByEmail(email: string): Promise<User | null> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const doc = await this.mongoDb.collection('users').findOne({ email: { $regex: new RegExp(`^${email}$`, 'i') } });
       if (!doc) return null;
@@ -335,6 +351,7 @@ class DatabaseClient {
   }
 
   public async findUserById(id: string): Promise<User | null> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const doc = await this.mongoDb.collection('users').findOne({ id });
       if (!doc) return null;
@@ -368,6 +385,7 @@ class DatabaseClient {
   }
 
   public async updateUserStats(id: string, points: number, level: number, streakDays: number, lastActiveDate: string | null): Promise<void> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       await this.mongoDb.collection('users').updateOne(
         { id },
@@ -392,6 +410,7 @@ class DatabaseClient {
   }
 
   public async updateUserBudget(id: string, budget: number): Promise<void> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       await this.mongoDb.collection('users').updateOne(
         { id },
@@ -410,6 +429,7 @@ class DatabaseClient {
   }
 
   public async getAllUsersSortedByPoints(): Promise<User[]> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const docs = await this.mongoDb.collection('users').find().sort({ points: -1 }).toArray();
       return docs.map(doc => {
@@ -438,6 +458,7 @@ class DatabaseClient {
   }
 
   public async updateUserPremiumStatus(id: string, isPremium: boolean): Promise<void> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       await this.mongoDb.collection('users').updateOne(
         { id },
@@ -460,6 +481,7 @@ class DatabaseClient {
   // ==========================================
 
   public async createFootprint(footprint: CarbonFootprint): Promise<CarbonFootprint> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const doc = { ...footprint };
       await this.mongoDb.collection('footprints').insertOne(doc);
@@ -492,6 +514,7 @@ class DatabaseClient {
   }
 
   public async getFootprintsByUserId(userId: string): Promise<CarbonFootprint[]> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const docs = await this.mongoDb.collection('footprints').find({ userId }).sort({ date: 1 }).toArray();
       return docs.map(doc => {
@@ -520,6 +543,7 @@ class DatabaseClient {
   }
 
   public async getLatestFootprint(userId: string): Promise<CarbonFootprint | null> {
+    await this.initDbSchema();
     const list = await this.getFootprintsByUserId(userId);
     if (list.length === 0) return null;
     return list[list.length - 1];
@@ -530,6 +554,7 @@ class DatabaseClient {
   // ==========================================
 
   public async createGoal(goal: Goal): Promise<Goal> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const doc = { ...goal };
       await this.mongoDb.collection('goals').insertOne(doc);
@@ -551,6 +576,7 @@ class DatabaseClient {
   }
 
   public async getGoalsByUserId(userId: string): Promise<Goal[]> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const docs = await this.mongoDb.collection('goals').find({ userId }).sort({ createdAt: -1 }).toArray();
       return docs.map(doc => {
@@ -578,6 +604,7 @@ class DatabaseClient {
   }
 
   public async updateGoalProgress(goalId: string, currentValue: number, status: 'active' | 'completed' | 'failed'): Promise<void> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       await this.mongoDb.collection('goals').updateOne(
         { id: goalId },
@@ -600,6 +627,7 @@ class DatabaseClient {
   }
 
   public async getGoalById(goalId: string): Promise<Goal | null> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const doc = await this.mongoDb.collection('goals').findOne({ id: goalId });
       if (!doc) return null;
@@ -632,6 +660,7 @@ class DatabaseClient {
   // ==========================================
 
   public async createBadge(badge: Badge): Promise<Badge> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const exists = await this.mongoDb.collection('badges').findOne({ userId: badge.userId, badgeType: badge.badgeType });
       if (!exists) {
@@ -657,6 +686,7 @@ class DatabaseClient {
   }
 
   public async getBadgesByUserId(userId: string): Promise<Badge[]> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const docs = await this.mongoDb.collection('badges').find({ userId }).sort({ earnedAt: -1 }).toArray();
       return docs.map(doc => {
@@ -684,6 +714,7 @@ class DatabaseClient {
   // ==========================================
 
   public async createUserChallenge(uc: UserChallenge): Promise<UserChallenge> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const doc = { ...uc };
       await this.mongoDb.collection('user_challenges').insertOne(doc);
@@ -705,6 +736,7 @@ class DatabaseClient {
   }
 
   public async getUserChallengesByUserId(userId: string): Promise<UserChallenge[]> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const docs = await this.mongoDb.collection('user_challenges').find({ userId }).toArray();
       return docs.map(doc => {
@@ -729,6 +761,7 @@ class DatabaseClient {
   }
 
   public async getUserChallenge(userId: string, challengeId: string): Promise<UserChallenge | null> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const doc = await this.mongoDb.collection('user_challenges').findOne({ userId, challengeId });
       if (!doc) return null;
@@ -754,6 +787,7 @@ class DatabaseClient {
   }
 
   public async updateUserChallengeProgress(userId: string, challengeId: string, progress: number, status: 'in_progress' | 'completed', completedAt: string | null): Promise<void> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       await this.mongoDb.collection('user_challenges').updateOne(
         { userId, challengeId },
@@ -781,6 +815,7 @@ class DatabaseClient {
   // ==========================================
 
   public async saveQuizProgress(userId: string, quizId: string, score: number, completedAt: string): Promise<void> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       await this.mongoDb.collection('quiz_progress').updateOne(
         { userId, quizId },
@@ -802,6 +837,7 @@ class DatabaseClient {
   }
 
   public async getQuizProgress(userId: string): Promise<{ userId: string; quizId: string; score: number; completedAt: string }[]> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const docs = await this.mongoDb.collection('quiz_progress').find({ userId }).toArray();
       return docs.map(doc => ({
@@ -825,6 +861,7 @@ class DatabaseClient {
   }
 
   public async saveReadProgress(userId: string, articleId: string, completedAt: string): Promise<void> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       await this.mongoDb.collection('read_progress').updateOne(
         { userId, articleId },
@@ -846,6 +883,7 @@ class DatabaseClient {
   }
 
   public async getReadProgress(userId: string): Promise<{ userId: string; articleId: string; completedAt: string }[]> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const docs = await this.mongoDb.collection('read_progress').find({ userId }).toArray();
       return docs.map(doc => ({
@@ -868,6 +906,7 @@ class DatabaseClient {
 
   // Helper method for clearing database for test suites
   public async clearAllData(): Promise<void> {
+    await this.initDbSchema();
     if (this.useMongo && this.mongoDb) {
       const collections = ['users', 'footprints', 'goals', 'badges', 'user_challenges', 'quiz_progress', 'read_progress'];
       for (const coll of collections) {
