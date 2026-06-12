@@ -38,11 +38,19 @@ class DatabaseClient {
     const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL_NON_POOLING || process.env.POSTGRES_URL;
     if (dbUrl) {
       console.log('⚡ Database Connection URL found. Initializing PostgreSQL Connection Pool...');
-      this.pool = new Pool({
-        connectionString: dbUrl,
-        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined
-      });
-      this.usePostgres = true;
+      try {
+        this.pool = new Pool({
+          connectionString: dbUrl,
+          ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined
+        });
+        this.usePostgres = true;
+      } catch (err) {
+        console.error('❌ Failed to instantiate PostgreSQL pool:', err);
+        console.log('Falling back to local JSON database...');
+        this.usePostgres = false;
+        this.pool = null;
+        this.initJsonDb();
+      }
     } else {
       console.log('⚠️ Database URL not found. Initializing local JSON Database Fallback...');
       this.initJsonDb();

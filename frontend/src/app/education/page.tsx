@@ -17,6 +17,7 @@ export default function EducationPage() {
   const [selectedOptionIdx, setSelectedOptionIdx] = useState<number | null>(null);
   const [showExplanation, setShowExplanation] = useState(false);
   const [quizScore, setQuizScore] = useState(0);
+  const quizScoreRef = React.useRef(0);
   const [quizFinished, setQuizFinished] = useState(false);
 
   const fetchEducationData = async () => {
@@ -61,6 +62,7 @@ export default function EducationPage() {
     const isCorrect = idx === activeQuiz.questions[currentQuestionIdx].correctOptionIndex;
     if (isCorrect) {
       setQuizScore(prev => prev + 1);
+      quizScoreRef.current += 1;
     }
   };
 
@@ -74,11 +76,12 @@ export default function EducationPage() {
     } else {
       setQuizFinished(true);
       try {
-        const res = await api.education.submitQuiz(activeQuiz.id, quizScore);
+        const finalScore = quizScoreRef.current;
+        const res = await api.education.submitQuiz(activeQuiz.id, finalScore);
         if (res.passed && res.rewards) {
           alert(`🏆 Quiz Passed! Reward: +${res.rewards.pointsEarned} Points!`);
         } else if (!res.passed) {
-          alert(`Quiz completed. Score: ${quizScore}/5. You need at least 3 correct answers to pass and earn rewards.`);
+          alert(`Quiz completed. Score: ${finalScore}/5. You need at least 3 correct answers to pass and earn rewards.`);
         }
         await fetchEducationData();
       } catch (err) {
@@ -93,6 +96,7 @@ export default function EducationPage() {
     setSelectedOptionIdx(null);
     setShowExplanation(false);
     setQuizScore(0);
+    quizScoreRef.current = 0;
     setQuizFinished(false);
   };
 
