@@ -33,6 +33,7 @@ const defaultDbState: JsonDbSchema = {
 class DatabaseClient {
   private pool: Pool | null = null;
   private usePostgres = false;
+  private schemaInitialized = false;
 
   constructor() {
     const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL_NON_POOLING || process.env.POSTGRES_URL;
@@ -92,7 +93,8 @@ class DatabaseClient {
 
   // Initialize DB tables for PostgreSQL
   public async initDbSchema() {
-    if (!this.usePostgres || !this.pool) return;
+    if (!this.usePostgres || !this.pool || this.schemaInitialized) return;
+    const pool = this.pool;
 
     const query = `
       CREATE TABLE IF NOT EXISTS users (
@@ -171,15 +173,28 @@ class DatabaseClient {
       );
     `;
 
-    try {
-      await this.pool.query(query);
-      // Safe schema migration: add is_premium column if it does not already exist
-      await this.pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_premium BOOLEAN DEFAULT FALSE;');
-      console.log('⚡ PostgreSQL Database schema verified/created successfully.');
-    } catch (err) {
-      console.error('❌ Error executing database initialization schema:', err);
-      console.log('PostgreSQL database pool initialization failed (possibly database cold start). Keeping pool active for runtime retries...');
-      this.initJsonDb();
+    let retries = 5;
+    while (retries > 0) {
+      try {
+        await pool.query(query);
+        // Safe schema migration: add is_premium column if it does not already exist
+        await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_premium BOOLEAN DEFAULT FALSE;');
+        console.log('⚡ PostgreSQL Database schema verified/created successfully.');
+        this.schemaInitialized = true;
+        return; // Success!
+      } catch (err) {
+        retries -= 1;
+        console.warn(`⚠️ PostgreSQL connection attempt failed. Retries remaining: ${retries}. Error:`, err);
+        if (retries === 0) {
+          console.error('❌ All PostgreSQL schema initialization retries failed. Falling back to local JSON database...');
+          this.usePostgres = false;
+          this.pool = null;
+          this.initJsonDb();
+        } else {
+          // Wait 3 seconds before retrying
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+      }
     }
   }
 
