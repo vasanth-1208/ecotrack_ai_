@@ -81,25 +81,19 @@ app.get('/', (_req, res) => {
 // Global Error Handler
 app.use(errorHandler);
 
-// Start Database & Express Server
-const startServer = async () => {
-  try {
-    // Check and create schema tables if using postgresql
-    await dbClient.initDbSchema();
-    
-    app.listen(PORT, () => {
-      console.log(`🚀 EcoTrack AI Backend API is running on http://localhost:${PORT}`);
-      console.log(`📖 Swagger API Docs available at http://localhost:${PORT}/api-docs`);
-    });
-  } catch (err) {
-    console.error('Failed to start server:', err);
-    process.exit(1);
-  }
-};
-
-// Export app for test suites
+// Initialize Database Schema on startup (non-blocking)
 if (process.env.NODE_ENV !== 'test') {
-  startServer();
+  dbClient.initDbSchema().catch(err => {
+    console.error('Failed to initialize database schema:', err);
+  });
+}
+
+// Start Express Server only when running locally (not on Vercel) and not in test environment
+if (process.env.NODE_ENV !== 'test' && !process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`🚀 EcoTrack AI Backend API is running on http://localhost:${PORT}`);
+    console.log(`📖 Swagger API Docs available at http://localhost:${PORT}/api-docs`);
+  });
 }
 
 export default app;

@@ -172,7 +172,7 @@ export class AuthController {
     }
   }
 
-  public static async demo(req: Request, res: Response) {
+  public static async demo(_req: Request, res: Response) {
     try {
       const demoEmail = `guest-${Math.random().toString(36).substring(2, 7)}@ecotrack.demo`;
       const userId = `demo-${Math.random().toString(36).substring(2, 9)}`;
