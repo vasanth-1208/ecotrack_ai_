@@ -5,7 +5,8 @@ import {
   User, CarbonFootprint, Goal, Badge, UserChallenge, BadgeType, GoalCategory
 } from '../types';
 
-const DATA_DIR = path.join(__dirname, '../../data');
+const isVercel = !!process.env.VERCEL;
+const DATA_DIR = isVercel ? '/tmp' : path.join(__dirname, '../../data');
 const JSON_DB_PATH = path.join(DATA_DIR, 'db.json');
 
 // Initialize local JSON database structure
