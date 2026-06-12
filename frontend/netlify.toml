@@ -9,6 +9,9 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/api/:splat"
