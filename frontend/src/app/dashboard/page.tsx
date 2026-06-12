@@ -2,25 +2,123 @@
 
 import React, { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
-import { 
-  ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid, BarChart, Bar 
+import {
+  ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid
 } from 'recharts';
+
+type Footprint = {
+  date: string;
+  totalEmissions: number;
+  transportEmissions: number;
+  energyEmissions: number;
+  foodEmissions: number;
+  shoppingEmissions: number;
+  wasteEmissions: number;
+  inputs?: {
+    renewablePercentage?: number;
+  };
+};
+
+type UserProfile = {
+  carbonBudget?: number;
+};
+
+type Prediction = {
+  date: string;
+  emissions: number;
+};
+
+type GoalProbability = {
+  goalTitle: string;
+  probabilityPercent: number;
+  projectedEmissionsAtDeadline: number;
+  statusText: string;
+};
+
+type ScoreBreakdown = {
+  reductionScore: number;
+  renewableScore: number;
+  challengeScore: number;
+  goalScore: number;
+  learningScore: number;
+};
+
+type WeeklyAction = {
+  habit: string;
+  impact: string;
+  difficulty: string;
+};
+
+type DashboardInsights = {
+  roadmap: {
+    immediateTargets: string[];
+  };
+  weeklyActionPlan: WeeklyAction[];
+};
+
+const getNextMonth = (dateStr: string, offsetMonths: number) => {
+  const [year, month] = dateStr.split('-').map(Number);
+  const date = new Date(year, month - 1 + offsetMonths, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const buildFallbackPredictions = (footprints: Footprint[]): Prediction[] => {
+  const latest = footprints[footprints.length - 1];
+  if (!latest) return [];
+
+  return Array.from({ length: 3 }).map((_, index) => ({
+    date: getNextMonth(latest.date, index + 1),
+    emissions: latest.totalEmissions,
+  }));
+};
+
+const buildFallbackInsights = (footprints: Footprint[]) => {
+  const latest = footprints[footprints.length - 1];
+  const renewableScore = latest?.inputs?.renewablePercentage || 0;
+  const budgetAwareScore = latest?.totalEmissions <= 400 ? 65 : 45;
+
+  return {
+    sustainabilityScore: Math.round((budgetAwareScore * 0.8) + (renewableScore * 0.2)),
+    scoreBreakdown: {
+      reductionScore: footprints.length > 1 ? 50 : 45,
+      renewableScore,
+      challengeScore: 50,
+      goalScore: 50,
+      learningScore: 0,
+    },
+    insights: {
+      roadmap: {
+        immediateTargets: [
+          'Review your largest emissions category and choose one reduction habit for this week.',
+          'Set a monthly carbon budget goal so EcoTrack can track your progress.',
+          'Re-log next month to unlock trend comparisons and stronger recommendations.',
+        ],
+      },
+      weeklyActionPlan: [
+        { habit: 'Replace one car trip with public transport', impact: 'Medium CO2 reduction', difficulty: 'easy' },
+        { habit: 'Shift laundry and cooling to efficient settings', impact: 'Lower energy use', difficulty: 'easy' },
+        { habit: 'Plan meals before shopping', impact: 'Less food waste', difficulty: 'medium' },
+      ],
+    },
+  };
+};
 
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
-  const [profile, setProfile] = useState<any>(null);
-  const [history, setHistory] = useState<any[]>([]);
-  const [predictions, setPredictions] = useState<any[]>([]);
-  const [goalProbs, setGoalProbs] = useState<any[]>([]);
-  const [insights, setInsights] = useState<any>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [history, setHistory] = useState<Footprint[]>([]);
+  const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [goalProbs, setGoalProbs] = useState<GoalProbability[]>([]);
+  const [insights, setInsights] = useState<DashboardInsights | null>(null);
   const [score, setScore] = useState<number>(0);
-  const [scoreBreakdown, setScoreBreakdown] = useState<any>(null);
+  const [scoreBreakdown, setScoreBreakdown] = useState<ScoreBreakdown | null>(null);
   const [error, setError] = useState('');
   const [pdfGenerating, setPdfGenerating] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
+    const mountedTimer = window.setTimeout(() => setMounted(true), 0);
+
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
@@ -28,19 +126,35 @@ export default function DashboardPage() {
         setProfile(meRes.user);
 
         const histRes = await api.footprint.getHistory();
-        setHistory(histRes.history);
+        const footprintHistory = histRes.history || [];
+        setHistory(footprintHistory);
 
-        if (histRes.history.length > 0) {
-          const predRes = await api.predictions.get();
-          setPredictions(predRes.predictions);
-          setGoalProbs(predRes.goalProbabilities);
+        if (footprintHistory.length > 0) {
+          const [predResult, insightsResult] = await Promise.allSettled([
+            api.predictions.get(),
+            api.ai.getInsights(),
+          ]);
 
-          const insRes = await api.ai.getInsights();
-          setInsights(insRes.insights);
-          setScore(insRes.sustainabilityScore);
-          setScoreBreakdown(insRes.scoreBreakdown);
+          if (predResult.status === 'fulfilled') {
+            setPredictions(predResult.value.predictions || []);
+            setGoalProbs(predResult.value.goalProbabilities || []);
+          } else {
+            setPredictions(buildFallbackPredictions(footprintHistory));
+            setGoalProbs([]);
+          }
+
+          if (insightsResult.status === 'fulfilled') {
+            setInsights(insightsResult.value.insights);
+            setScore(insightsResult.value.sustainabilityScore);
+            setScoreBreakdown(insightsResult.value.scoreBreakdown);
+          } else {
+            const fallback = buildFallbackInsights(footprintHistory);
+            setInsights(fallback.insights);
+            setScore(fallback.sustainabilityScore);
+            setScoreBreakdown(fallback.scoreBreakdown);
+          }
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('Fetch Dashboard Error:', err);
         setError('Complete the Carbon Calculator first to unlock the dashboard charts and AI insights.');
       } finally {
@@ -49,6 +163,8 @@ export default function DashboardPage() {
     };
 
     fetchDashboardData();
+
+    return () => window.clearTimeout(mountedTimer);
   }, []);
 
   const triggerPDFDownload = async () => {
@@ -90,7 +206,7 @@ export default function DashboardPage() {
           <span className="text-5xl block mb-4">🌱</span>
           <h2 className="text-2xl font-bold text-slate-850 dark:text-white mb-2">Welcome to EcoTrack AI</h2>
           <p className="text-slate-500 dark:text-slate-400 text-sm mb-6 leading-relaxed">
-            We don't see any logged emissions yet. Complete your first monthly footprint log using the calculator to view trends, benchmark averages, and receive personalized AI roadmaps.
+            We don&apos;t see any logged emissions yet. Complete your first monthly footprint log using the calculator to view trends, benchmark averages, and receive personalized AI roadmaps.
           </p>
           <a
             href="/calculator"
@@ -106,7 +222,7 @@ export default function DashboardPage() {
   const latest = history[history.length - 1];
 
   // Budget calculations
-  const budget = profile.carbonBudget || 400;
+  const budget = profile?.carbonBudget || 400;
   const emissions = latest.totalEmissions || 0;
   const budgetUsagePercent = Math.round((emissions / budget) * 100);
   
@@ -157,8 +273,6 @@ export default function DashboardPage() {
   // Benchmarking
   const userAnnual = emissions * 12;
   const indiaAvg = 1900;
-  const globalAvg = 4700;
-  
   const pctVsIndia = Math.round(Math.abs((userAnnual - indiaAvg) / indiaAvg) * 100);
   const isLowerThanIndia = userAnnual <= indiaAvg;
 
@@ -442,7 +556,7 @@ export default function DashboardPage() {
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6">
             <h3 className="font-bold text-slate-900 dark:text-white mb-4">Weekly Eco-Habits Plan</h3>
             <div className="space-y-3">
-              {insights && insights.weeklyActionPlan.slice(0, 3).map((act: any, i: number) => (
+              {insights && insights.weeklyActionPlan.slice(0, 3).map((act: WeeklyAction, i: number) => (
                 <div key={i} className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-lg border border-slate-100 dark:border-slate-800">
                   <p className="text-xs font-bold text-slate-850 dark:text-white">{act.habit}</p>
                   <div className="flex justify-between items-center text-[10px] text-emerald-700 dark:text-emerald-400 font-bold mt-1.5">

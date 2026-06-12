@@ -1,4 +1,10 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+const LOCAL_FOOTPRINT_HISTORY_PREFIX = 'ecotrack_footprints_';
+
+type StoredFootprint = {
+  date: string;
+  [key: string]: unknown;
+};
 
 export const getAuthToken = (): string | null => {
   if (typeof window !== 'undefined') {
@@ -17,6 +23,51 @@ export const removeAuthToken = () => {
   if (typeof window !== 'undefined') {
     localStorage.removeItem('ecotrack_token');
   }
+};
+
+const getLocalFootprintHistoryKey = (): string => {
+  const token = getAuthToken();
+  return `${LOCAL_FOOTPRINT_HISTORY_PREFIX}${token || 'anonymous'}`;
+};
+
+const isStoredFootprint = (value: unknown): value is StoredFootprint => {
+  return !!value && typeof value === 'object' && typeof (value as StoredFootprint).date === 'string';
+};
+
+const readLocalFootprintHistory = (): StoredFootprint[] => {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const raw = localStorage.getItem(getLocalFootprintHistoryKey());
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter(isStoredFootprint) : [];
+  } catch {
+    return [];
+  }
+};
+
+const writeLocalFootprintHistory = (history: StoredFootprint[]) => {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(getLocalFootprintHistoryKey(), JSON.stringify(history));
+};
+
+const mergeFootprintHistory = (serverHistory: unknown[], localHistory: StoredFootprint[]) => {
+  const byMonth = new Map<string, StoredFootprint>();
+
+  [...serverHistory, ...localHistory].forEach((footprint) => {
+    if (isStoredFootprint(footprint)) {
+      byMonth.set(footprint.date, footprint);
+    }
+  });
+
+  return Array.from(byMonth.values()).sort((a, b) => a.date.localeCompare(b.date));
+};
+
+const rememberFootprint = (footprint: unknown) => {
+  if (!isStoredFootprint(footprint)) return;
+
+  const history = mergeFootprintHistory(readLocalFootprintHistory(), [footprint]);
+  writeLocalFootprintHistory(history);
 };
 
 export async function apiRequest<T = any>(
@@ -85,12 +136,29 @@ export const api = {
       }),
   },
   footprint: {
-    submit: (inputs: any) =>
-      apiRequest('/footprint', {
+    submit: async (inputs: any) => {
+      const result = await apiRequest('/footprint', {
         method: 'POST',
         body: JSON.stringify(inputs),
-      }),
-    getHistory: () => apiRequest('/footprint/history'),
+      });
+      rememberFootprint(result.footprint);
+      return result;
+    },
+    getHistory: async () => {
+      const localHistory = readLocalFootprintHistory();
+      try {
+        const result = await apiRequest('/footprint/history');
+        return {
+          ...result,
+          history: mergeFootprintHistory(result.history || [], localHistory),
+        };
+      } catch (err: any) {
+        if (err.message === 'Unauthorized' || localHistory.length === 0) {
+          throw err;
+        }
+        return { history: localHistory };
+      }
+    },
   },
   predictions: {
     get: () => apiRequest('/predictions'),
