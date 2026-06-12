@@ -1,12 +1,13 @@
 import { Pool } from 'pg';
+import { MongoClient, Db } from 'mongodb';
 import * as fs from 'fs';
 import * as path from 'path';
 import { 
   User, CarbonFootprint, Goal, Badge, UserChallenge, BadgeType, GoalCategory
 } from '../types';
 
-const isVercel = !!process.env.VERCEL;
-const DATA_DIR = isVercel ? '/tmp' : path.join(__dirname, '../../data');
+const isServerless = !!(process.env.VERCEL || process.env.NETLIFY || process.env.LAMBDA_TASK_ROOT);
+const DATA_DIR = isServerless ? '/tmp' : path.join(__dirname, '../../data');
 const JSON_DB_PATH = path.join(DATA_DIR, 'db.json');
 
 // Initialize local JSON database structure
@@ -35,9 +36,28 @@ class DatabaseClient {
   private usePostgres = false;
   private schemaInitialized = false;
 
+  // MongoDB properties
+  private mongoClient: MongoClient | null = null;
+  private mongoDb: Db | null = null;
+  private useMongo = false;
+
   constructor() {
+    const mongoUrl = process.env.MONGODB_URI || process.env.MONGO_URL;
     const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL_NON_POOLING || process.env.POSTGRES_URL;
-    if (dbUrl) {
+
+    if (mongoUrl) {
+      console.log('⚡ MongoDB Connection URL found. Initializing MongoDB Connection...');
+      try {
+        this.mongoClient = new MongoClient(mongoUrl);
+        this.useMongo = true;
+      } catch (err) {
+        console.error('❌ Failed to instantiate MongoDB client:', err);
+        console.log('Falling back to local JSON database...');
+        this.useMongo = false;
+        this.mongoClient = null;
+        this.initJsonDb();
+      }
+    } else if (dbUrl) {
       console.log('⚡ Database Connection URL found. Initializing PostgreSQL Connection Pool...');
       try {
         this.pool = new Pool({
@@ -61,6 +81,10 @@ class DatabaseClient {
   // Getter for checking database mode
   public isPostgres(): boolean {
     return this.usePostgres;
+  }
+
+  public isMongo(): boolean {
+    return this.useMongo;
   }
 
   // Initialize JSON database folder and file
@@ -91,8 +115,50 @@ class DatabaseClient {
     fs.writeFileSync(JSON_DB_PATH, JSON.stringify(data, null, 2), 'utf-8');
   }
 
-  // Initialize DB tables for PostgreSQL
+  // Initialize DB tables for PostgreSQL or Collections/Indexes for MongoDB
   public async initDbSchema() {
+    if (this.useMongo && this.mongoClient) {
+      const client = this.mongoClient;
+      let retries = 5;
+      while (retries > 0) {
+        try {
+          await client.connect();
+          const db = client.db();
+          this.mongoDb = db;
+          
+          // Create collections indexes
+          await db.collection('users').createIndex({ id: 1 }, { unique: true });
+          await db.collection('users').createIndex({ email: 1 }, { unique: true });
+          await db.collection('footprints').createIndex({ id: 1 }, { unique: true });
+          await db.collection('footprints').createIndex({ userId: 1 });
+          await db.collection('goals').createIndex({ id: 1 }, { unique: true });
+          await db.collection('goals').createIndex({ userId: 1 });
+          await db.collection('badges').createIndex({ id: 1 }, { unique: true });
+          await db.collection('badges').createIndex({ userId: 1 });
+          await db.collection('user_challenges').createIndex({ id: 1 }, { unique: true });
+          await db.collection('user_challenges').createIndex({ userId: 1 });
+          await db.collection('quiz_progress').createIndex({ userId: 1, quizId: 1 }, { unique: true });
+          await db.collection('read_progress').createIndex({ userId: 1, articleId: 1 }, { unique: true });
+          
+          console.log('⚡ MongoDB Database connected and indexes verified successfully.');
+          this.schemaInitialized = true;
+          return;
+        } catch (err) {
+          retries -= 1;
+          console.warn(`⚠️ MongoDB connection attempt failed. Retries remaining: ${retries}. Error:`, err);
+          if (retries === 0) {
+            console.error('❌ All MongoDB initialization retries failed. Falling back to local JSON database...');
+            this.useMongo = false;
+            this.mongoClient = null;
+            this.initJsonDb();
+          } else {
+            await new Promise(resolve => setTimeout(resolve, 3000));
+          }
+        }
+      }
+      return;
+    }
+
     if (!this.usePostgres || !this.pool || this.schemaInitialized) return;
     const pool = this.pool;
 
@@ -177,11 +243,10 @@ class DatabaseClient {
     while (retries > 0) {
       try {
         await pool.query(query);
-        // Safe schema migration: add is_premium column if it does not already exist
         await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_premium BOOLEAN DEFAULT FALSE;');
         console.log('⚡ PostgreSQL Database schema verified/created successfully.');
         this.schemaInitialized = true;
-        return; // Success!
+        return;
       } catch (err) {
         retries -= 1;
         console.warn(`⚠️ PostgreSQL connection attempt failed. Retries remaining: ${retries}. Error:`, err);
@@ -191,7 +256,6 @@ class DatabaseClient {
           this.pool = null;
           this.initJsonDb();
         } else {
-          // Wait 3 seconds before retrying
           await new Promise(resolve => setTimeout(resolve, 3000));
         }
       }
@@ -203,7 +267,12 @@ class DatabaseClient {
   // ==========================================
 
   public async createUser(user: User): Promise<User> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const doc = { ...user, isPremium: user.isPremium || false };
+      await this.mongoDb.collection('users').insertOne(doc);
+      const { _id, ...cleanUser } = doc as any;
+      return cleanUser;
+    } else if (this.usePostgres && this.pool) {
       const q = `INSERT INTO users (id, email, password_hash, full_name, points, level, streak_days, last_active_date, carbon_budget, created_at, is_premium)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`;
       const res = await this.pool.query(q, [
@@ -225,7 +294,6 @@ class DatabaseClient {
       };
     } else {
       const db = this.readJsonDb();
-      // Ensure local state default for new user
       const localUser = { ...user, isPremium: user.isPremium || false };
       db.users.push(localUser);
       this.writeJsonDb(db);
@@ -234,7 +302,12 @@ class DatabaseClient {
   }
 
   public async findUserByEmail(email: string): Promise<User | null> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const doc = await this.mongoDb.collection('users').findOne({ email: { $regex: new RegExp(`^${email}$`, 'i') } });
+      if (!doc) return null;
+      const { _id, ...clean } = doc as any;
+      return clean;
+    } else if (this.usePostgres && this.pool) {
       const res = await this.pool.query('SELECT * FROM users WHERE email = $1', [email]);
       if (res.rows.length === 0) return null;
       const row = res.rows[0];
@@ -262,7 +335,12 @@ class DatabaseClient {
   }
 
   public async findUserById(id: string): Promise<User | null> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const doc = await this.mongoDb.collection('users').findOne({ id });
+      if (!doc) return null;
+      const { _id, ...clean } = doc as any;
+      return clean;
+    } else if (this.usePostgres && this.pool) {
       const res = await this.pool.query('SELECT * FROM users WHERE id = $1', [id]);
       if (res.rows.length === 0) return null;
       const row = res.rows[0];
@@ -290,7 +368,12 @@ class DatabaseClient {
   }
 
   public async updateUserStats(id: string, points: number, level: number, streakDays: number, lastActiveDate: string | null): Promise<void> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      await this.mongoDb.collection('users').updateOne(
+        { id },
+        { $set: { points, level, streakDays, lastActiveDate } }
+      );
+    } else if (this.usePostgres && this.pool) {
       await this.pool.query(
         'UPDATE users SET points = $1, level = $2, streak_days = $3, last_active_date = $4 WHERE id = $5',
         [points, level, streakDays, lastActiveDate, id]
@@ -309,7 +392,12 @@ class DatabaseClient {
   }
 
   public async updateUserBudget(id: string, budget: number): Promise<void> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      await this.mongoDb.collection('users').updateOne(
+        { id },
+        { $set: { carbonBudget: budget } }
+      );
+    } else if (this.usePostgres && this.pool) {
       await this.pool.query('UPDATE users SET carbon_budget = $1 WHERE id = $2', [budget, id]);
     } else {
       const db = this.readJsonDb();
@@ -322,7 +410,13 @@ class DatabaseClient {
   }
 
   public async getAllUsersSortedByPoints(): Promise<User[]> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const docs = await this.mongoDb.collection('users').find().sort({ points: -1 }).toArray();
+      return docs.map(doc => {
+        const { _id, ...clean } = doc as any;
+        return clean;
+      });
+    } else if (this.usePostgres && this.pool) {
       const res = await this.pool.query('SELECT * FROM users ORDER BY points DESC');
       return res.rows.map(row => ({
         id: row.id,
@@ -344,7 +438,12 @@ class DatabaseClient {
   }
 
   public async updateUserPremiumStatus(id: string, isPremium: boolean): Promise<void> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      await this.mongoDb.collection('users').updateOne(
+        { id },
+        { $set: { isPremium } }
+      );
+    } else if (this.usePostgres && this.pool) {
       await this.pool.query('UPDATE users SET is_premium = $1 WHERE id = $2', [isPremium, id]);
     } else {
       const db = this.readJsonDb();
@@ -361,7 +460,12 @@ class DatabaseClient {
   // ==========================================
 
   public async createFootprint(footprint: CarbonFootprint): Promise<CarbonFootprint> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const doc = { ...footprint };
+      await this.mongoDb.collection('footprints').insertOne(doc);
+      const { _id, ...clean } = doc as any;
+      return clean;
+    } else if (this.usePostgres && this.pool) {
       const q = `INSERT INTO footprints (id, user_id, date, inputs, transport_emissions, energy_emissions, food_emissions, shopping_emissions, waste_emissions, total_emissions, created_at)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`;
       await this.pool.query(q, [
@@ -380,7 +484,6 @@ class DatabaseClient {
       return footprint;
     } else {
       const db = this.readJsonDb();
-      // Remove any existing entry for the same user and month (upsert feel)
       db.footprints = db.footprints.filter(f => !(f.userId === footprint.userId && f.date === footprint.date));
       db.footprints.push(footprint);
       this.writeJsonDb(db);
@@ -389,7 +492,13 @@ class DatabaseClient {
   }
 
   public async getFootprintsByUserId(userId: string): Promise<CarbonFootprint[]> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const docs = await this.mongoDb.collection('footprints').find({ userId }).sort({ date: 1 }).toArray();
+      return docs.map(doc => {
+        const { _id, ...clean } = doc as any;
+        return clean;
+      });
+    } else if (this.usePostgres && this.pool) {
       const res = await this.pool.query('SELECT * FROM footprints WHERE user_id = $1 ORDER BY date ASC', [userId]);
       return res.rows.map(row => ({
         id: row.id,
@@ -413,7 +522,7 @@ class DatabaseClient {
   public async getLatestFootprint(userId: string): Promise<CarbonFootprint | null> {
     const list = await this.getFootprintsByUserId(userId);
     if (list.length === 0) return null;
-    return list[list.length - 1]; // sorted by date ASC, so last is latest
+    return list[list.length - 1];
   }
 
   // ==========================================
@@ -421,7 +530,12 @@ class DatabaseClient {
   // ==========================================
 
   public async createGoal(goal: Goal): Promise<Goal> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const doc = { ...goal };
+      await this.mongoDb.collection('goals').insertOne(doc);
+      const { _id, ...clean } = doc as any;
+      return clean;
+    } else if (this.usePostgres && this.pool) {
       const q = `INSERT INTO goals (id, user_id, title, category, target_value, current_value, start_date, target_date, status, created_at)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`;
       await this.pool.query(q, [
@@ -437,7 +551,13 @@ class DatabaseClient {
   }
 
   public async getGoalsByUserId(userId: string): Promise<Goal[]> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const docs = await this.mongoDb.collection('goals').find({ userId }).sort({ createdAt: -1 }).toArray();
+      return docs.map(doc => {
+        const { _id, ...clean } = doc as any;
+        return clean;
+      });
+    } else if (this.usePostgres && this.pool) {
       const res = await this.pool.query('SELECT * FROM goals WHERE user_id = $1 ORDER BY created_at DESC', [userId]);
       return res.rows.map(row => ({
         id: row.id,
@@ -458,7 +578,12 @@ class DatabaseClient {
   }
 
   public async updateGoalProgress(goalId: string, currentValue: number, status: 'active' | 'completed' | 'failed'): Promise<void> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      await this.mongoDb.collection('goals').updateOne(
+        { id: goalId },
+        { $set: { currentValue, status } }
+      );
+    } else if (this.usePostgres && this.pool) {
       await this.pool.query(
         'UPDATE goals SET current_value = $1, status = $2 WHERE id = $3',
         [currentValue, status, goalId]
@@ -475,7 +600,12 @@ class DatabaseClient {
   }
 
   public async getGoalById(goalId: string): Promise<Goal | null> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const doc = await this.mongoDb.collection('goals').findOne({ id: goalId });
+      if (!doc) return null;
+      const { _id, ...clean } = doc as any;
+      return clean;
+    } else if (this.usePostgres && this.pool) {
       const res = await this.pool.query('SELECT * FROM goals WHERE id = $1', [goalId]);
       if (res.rows.length === 0) return null;
       const row = res.rows[0];
@@ -502,7 +632,14 @@ class DatabaseClient {
   // ==========================================
 
   public async createBadge(badge: Badge): Promise<Badge> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const exists = await this.mongoDb.collection('badges').findOne({ userId: badge.userId, badgeType: badge.badgeType });
+      if (!exists) {
+        const doc = { ...badge };
+        await this.mongoDb.collection('badges').insertOne(doc);
+      }
+      return badge;
+    } else if (this.usePostgres && this.pool) {
       const q = `INSERT INTO badges (id, user_id, badge_type, title, description, earned_at)
                  VALUES ($1, $2, $3, $4, $5, $6)`;
       await this.pool.query(q, [
@@ -520,7 +657,13 @@ class DatabaseClient {
   }
 
   public async getBadgesByUserId(userId: string): Promise<Badge[]> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const docs = await this.mongoDb.collection('badges').find({ userId }).sort({ earnedAt: -1 }).toArray();
+      return docs.map(doc => {
+        const { _id, ...clean } = doc as any;
+        return clean;
+      });
+    } else if (this.usePostgres && this.pool) {
       const res = await this.pool.query('SELECT * FROM badges WHERE user_id = $1 ORDER BY earned_at DESC', [userId]);
       return res.rows.map(row => ({
         id: row.id,
@@ -541,7 +684,12 @@ class DatabaseClient {
   // ==========================================
 
   public async createUserChallenge(uc: UserChallenge): Promise<UserChallenge> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const doc = { ...uc };
+      await this.mongoDb.collection('user_challenges').insertOne(doc);
+      const { _id, ...clean } = doc as any;
+      return clean;
+    } else if (this.usePostgres && this.pool) {
       const q = `INSERT INTO user_challenges (id, user_id, challenge_id, status, progress, started_at, completed_at)
                  VALUES ($1, $2, $3, $4, $5, $6, $7)`;
       await this.pool.query(q, [
@@ -557,7 +705,13 @@ class DatabaseClient {
   }
 
   public async getUserChallengesByUserId(userId: string): Promise<UserChallenge[]> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const docs = await this.mongoDb.collection('user_challenges').find({ userId }).toArray();
+      return docs.map(doc => {
+        const { _id, ...clean } = doc as any;
+        return clean;
+      });
+    } else if (this.usePostgres && this.pool) {
       const res = await this.pool.query('SELECT * FROM user_challenges WHERE user_id = $1', [userId]);
       return res.rows.map(row => ({
         id: row.id,
@@ -575,7 +729,12 @@ class DatabaseClient {
   }
 
   public async getUserChallenge(userId: string, challengeId: string): Promise<UserChallenge | null> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const doc = await this.mongoDb.collection('user_challenges').findOne({ userId, challengeId });
+      if (!doc) return null;
+      const { _id, ...clean } = doc as any;
+      return clean;
+    } else if (this.usePostgres && this.pool) {
       const res = await this.pool.query('SELECT * FROM user_challenges WHERE user_id = $1 AND challenge_id = $2', [userId, challengeId]);
       if (res.rows.length === 0) return null;
       const row = res.rows[0];
@@ -595,7 +754,12 @@ class DatabaseClient {
   }
 
   public async updateUserChallengeProgress(userId: string, challengeId: string, progress: number, status: 'in_progress' | 'completed', completedAt: string | null): Promise<void> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      await this.mongoDb.collection('user_challenges').updateOne(
+        { userId, challengeId },
+        { $set: { progress, status, completedAt } }
+      );
+    } else if (this.usePostgres && this.pool) {
       await this.pool.query(
         'UPDATE user_challenges SET progress = $1, status = $2, completed_at = $3 WHERE user_id = $4 AND challenge_id = $5',
         [progress, status, completedAt, userId, challengeId]
@@ -617,7 +781,13 @@ class DatabaseClient {
   // ==========================================
 
   public async saveQuizProgress(userId: string, quizId: string, score: number, completedAt: string): Promise<void> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      await this.mongoDb.collection('quiz_progress').updateOne(
+        { userId, quizId },
+        { $set: { score, completedAt } },
+        { upsert: true }
+      );
+    } else if (this.usePostgres && this.pool) {
       const q = `INSERT INTO quiz_progress (user_id, quiz_id, score, completed_at)
                  VALUES ($1, $2, $3, $4)
                  ON CONFLICT (user_id, quiz_id) 
@@ -632,7 +802,15 @@ class DatabaseClient {
   }
 
   public async getQuizProgress(userId: string): Promise<{ userId: string; quizId: string; score: number; completedAt: string }[]> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const docs = await this.mongoDb.collection('quiz_progress').find({ userId }).toArray();
+      return docs.map(doc => ({
+        userId: doc.userId,
+        quizId: doc.quizId,
+        score: doc.score,
+        completedAt: doc.completedAt
+      }));
+    } else if (this.usePostgres && this.pool) {
       const res = await this.pool.query('SELECT * FROM quiz_progress WHERE user_id = $1', [userId]);
       return res.rows.map(row => ({
         userId: row.user_id,
@@ -647,7 +825,13 @@ class DatabaseClient {
   }
 
   public async saveReadProgress(userId: string, articleId: string, completedAt: string): Promise<void> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      await this.mongoDb.collection('read_progress').updateOne(
+        { userId, articleId },
+        { $set: { completedAt } },
+        { upsert: true }
+      );
+    } else if (this.usePostgres && this.pool) {
       const q = `INSERT INTO read_progress (user_id, article_id, completed_at)
                  VALUES ($1, $2, $3)
                  ON CONFLICT (user_id, article_id) DO NOTHING`;
@@ -662,7 +846,14 @@ class DatabaseClient {
   }
 
   public async getReadProgress(userId: string): Promise<{ userId: string; articleId: string; completedAt: string }[]> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const docs = await this.mongoDb.collection('read_progress').find({ userId }).toArray();
+      return docs.map(doc => ({
+        userId: doc.userId,
+        articleId: doc.articleId,
+        completedAt: doc.completedAt
+      }));
+    } else if (this.usePostgres && this.pool) {
       const res = await this.pool.query('SELECT * FROM read_progress WHERE user_id = $1', [userId]);
       return res.rows.map(row => ({
         userId: row.user_id,
@@ -677,7 +868,16 @@ class DatabaseClient {
 
   // Helper method for clearing database for test suites
   public async clearAllData(): Promise<void> {
-    if (this.usePostgres && this.pool) {
+    if (this.useMongo && this.mongoDb) {
+      const collections = ['users', 'footprints', 'goals', 'badges', 'user_challenges', 'quiz_progress', 'read_progress'];
+      for (const coll of collections) {
+        try {
+          await this.mongoDb.collection(coll).deleteMany({});
+        } catch (e) {
+          // ignore if collection doesn't exist yet
+        }
+      }
+    } else if (this.usePostgres && this.pool) {
       await this.pool.query('TRUNCATE TABLE read_progress, quiz_progress, user_challenges, badges, goals, footprints, users CASCADE');
     } else {
       this.writeJsonDb(JSON.parse(JSON.stringify(defaultDbState)));

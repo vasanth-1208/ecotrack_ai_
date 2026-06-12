@@ -1,0 +1,17 @@
+[build]
+  command = "npm run build"
+  publish = "frontend/.next"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/api-docs/*"
+  to = "/.netlify/functions/api/api-docs/:splat"
+  status = 200
