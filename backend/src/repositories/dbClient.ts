@@ -34,16 +34,16 @@ class DatabaseClient {
   private usePostgres = false;
 
   constructor() {
-    const dbUrl = process.env.DATABASE_URL;
+    const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL_NON_POOLING || process.env.POSTGRES_URL;
     if (dbUrl) {
-      console.log('⚡ DATABASE_URL found. Initializing PostgreSQL Connection Pool...');
+      console.log('⚡ Database Connection URL found. Initializing PostgreSQL Connection Pool...');
       this.pool = new Pool({
         connectionString: dbUrl,
         ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined
       });
       this.usePostgres = true;
     } else {
-      console.log('⚠️ DATABASE_URL not found. Initializing local JSON Database Fallback...');
+      console.log('⚠️ Database URL not found. Initializing local JSON Database Fallback...');
       this.initJsonDb();
     }
   }
