@@ -2,6 +2,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 const LOCAL_FOOTPRINT_HISTORY_PREFIX = 'ecotrack_footprints_';
 const LOCAL_AUTH_PROFILE_PREFIX = 'ecotrack_profile_';
 const LOCAL_GOALS_PREFIX = 'ecotrack_goals_';
+export const AUTH_PROFILE_UPDATED_EVENT = 'ecotrack-auth-profile-updated';
 
 type StoredFootprint = {
   date: string;
@@ -20,6 +21,12 @@ type AuthProfile = {
 type AuthResponse = {
   token: string;
   user?: AuthProfile;
+};
+
+type RewardsPayload = {
+  totalPoints?: number;
+  level?: number;
+  newLevel?: number;
 };
 
 type StoredGoal = {
@@ -130,6 +137,7 @@ const rememberAuthProfile = (response: AuthResponse) => {
   if (!profile) return;
 
   localStorage.setItem(getLocalAuthProfileKey(response.token), JSON.stringify(profile));
+  window.dispatchEvent(new CustomEvent(AUTH_PROFILE_UPDATED_EVENT, { detail: profile }));
 };
 
 const getLocalGoalsKey = (): string => {
@@ -230,6 +238,35 @@ const readLocalAuthProfile = (): AuthProfile | null => {
   }
 };
 
+const updateLocalAuthProfile = (updates: Partial<AuthProfile>) => {
+  if (typeof window === 'undefined') return null;
+
+  const profile = normalizeAuthProfile({ ...(readLocalAuthProfile() || {}), ...updates });
+  if (!profile) return null;
+
+  localStorage.setItem(getLocalAuthProfileKey(), JSON.stringify(profile));
+  window.dispatchEvent(new CustomEvent(AUTH_PROFILE_UPDATED_EVENT, { detail: profile }));
+  return profile;
+};
+
+const rememberRewards = (rewards: RewardsPayload | null | undefined) => {
+  if (!rewards) return;
+
+  const updates: Partial<AuthProfile> = {};
+  if (typeof rewards.totalPoints === 'number') {
+    updates.points = rewards.totalPoints;
+  }
+  if (typeof rewards.level === 'number') {
+    updates.level = rewards.level;
+  } else if (typeof rewards.newLevel === 'number') {
+    updates.level = rewards.newLevel;
+  }
+
+  if (Object.keys(updates).length > 0) {
+    updateLocalAuthProfile(updates);
+  }
+};
+
 export async function apiRequest<T = any>(
   endpoint: string,
   options: RequestInit = {}
@@ -291,8 +328,13 @@ export const api = {
       return result;
     },
     upgrade: () =>
-      apiRequest('/auth/upgrade', {
+      apiRequest<{ isPremium?: boolean }>('/auth/upgrade', {
         method: 'POST',
+      }).then((result) => {
+        if (result.isPremium) {
+          updateLocalAuthProfile({ isPremium: true });
+        }
+        return result;
       }),
     me: async () => {
       try {
@@ -300,7 +342,11 @@ export const api = {
         if (result.user) {
           const token = getAuthToken();
           if (typeof window !== 'undefined' && token) {
-            localStorage.setItem(getLocalAuthProfileKey(token), JSON.stringify(result.user));
+            const profile = normalizeAuthProfile(result.user);
+            if (profile) {
+              localStorage.setItem(getLocalAuthProfileKey(token), JSON.stringify(profile));
+              window.dispatchEvent(new CustomEvent(AUTH_PROFILE_UPDATED_EVENT, { detail: profile }));
+            }
           }
         }
         return result;
@@ -331,6 +377,7 @@ export const api = {
         body: JSON.stringify(inputs),
       });
       rememberFootprint(result.footprint);
+      rememberRewards(result.gamification);
       return result;
     },
     getHistory: async () => {
@@ -391,6 +438,7 @@ export const api = {
           method: 'PUT',
           body: JSON.stringify({ currentValue }),
         });
+        rememberRewards(result.rewards);
         const localGoals = readLocalGoals().map((goal) =>
           goal.id === id
             ? {
@@ -422,11 +470,14 @@ export const api = {
     getChallenges: () => apiRequest('/gamification/challenges'),
     joinChallenge: (id: string) =>
       apiRequest(`/gamification/challenges/${id}/join`, { method: 'POST' }),
-    logProgress: (id: string, progress: number) =>
-      apiRequest(`/gamification/challenges/${id}/progress`, {
+    logProgress: async (id: string, progress: number) => {
+      const result = await apiRequest(`/gamification/challenges/${id}/progress`, {
         method: 'POST',
         body: JSON.stringify({ progress }),
-      }),
+      });
+      rememberRewards(result.rewards);
+      return result;
+    },
     getLeaderboard: () => apiRequest('/gamification/leaderboard'),
     getBadges: () => apiRequest('/gamification/badges'),
   },
@@ -449,14 +500,20 @@ export const api = {
   },
   education: {
     getArticles: () => apiRequest('/education/articles'),
-    readArticle: (id: string) =>
-      apiRequest(`/education/articles/${id}/read`, { method: 'POST' }),
+    readArticle: async (id: string) => {
+      const result = await apiRequest(`/education/articles/${id}/read`, { method: 'POST' });
+      rememberRewards(result.rewards);
+      return result;
+    },
     getQuizzes: () => apiRequest('/education/quizzes'),
-    submitQuiz: (id: string, score: number) =>
-      apiRequest(`/education/quizzes/${id}/submit`, {
+    submitQuiz: async (id: string, score: number) => {
+      const result = await apiRequest(`/education/quizzes/${id}/submit`, {
         method: 'POST',
         body: JSON.stringify({ score }),
-      }),
+      });
+      rememberRewards(result.rewards);
+      return result;
+    },
   },
   simulator: {
     run: (inputs: any) =>

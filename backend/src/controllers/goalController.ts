@@ -120,7 +120,8 @@ export class GoalController {
       }
 
       let status = goal.status;
-      if (currentValue <= goal.targetValue) {
+      let rewards = null;
+      if (goal.status !== 'completed' && currentValue <= goal.targetValue) {
         status = 'completed';
         // Reward
         const user = await dbClient.findUserById(userId);
@@ -128,11 +129,12 @@ export class GoalController {
           const newPoints = user.points + 150;
           const newLevel = Math.max(1, Math.floor(newPoints / 500) + 1);
           await dbClient.updateUserStats(userId, newPoints, newLevel, user.streakDays, user.lastActiveDate);
+          rewards = { pointsEarned: 150, totalPoints: newPoints, level: newLevel };
         }
       }
 
       await dbClient.updateGoalProgress(id, currentValue, status);
-      return res.status(200).json({ message: 'Goal progress updated', status, currentValue });
+      return res.status(200).json({ message: 'Goal progress updated', status, currentValue, rewards });
     } catch (err: any) {
       console.error('Update Goal Error:', err);
       return res.status(500).json({ error: 'Failed to update goal.' });

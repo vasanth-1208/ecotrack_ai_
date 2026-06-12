@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { api } from '../../lib/api';
+import { AUTH_PROFILE_UPDATED_EVENT, api } from '../../lib/api';
 
 export default function GamificationPage() {
   const [profile, setProfile] = useState<any>(null);
@@ -35,7 +35,29 @@ export default function GamificationPage() {
       await fetchGamificationData();
       setLoading(false);
     };
+
+    const handleProfileUpdate = (event: Event) => {
+      const updatedProfile = (event as CustomEvent).detail;
+      if (!updatedProfile) return;
+
+      setProfile((current: any) => ({ ...current, ...updatedProfile }));
+      setLeaderboard((entries) =>
+        entries.map((entry) =>
+          entry.userId === updatedProfile.id
+            ? {
+                ...entry,
+                points: updatedProfile.points,
+                level: updatedProfile.level,
+              }
+            : entry
+        )
+      );
+    };
+
     init();
+    window.addEventListener(AUTH_PROFILE_UPDATED_EVENT, handleProfileUpdate);
+
+    return () => window.removeEventListener(AUTH_PROFILE_UPDATED_EVENT, handleProfileUpdate);
   }, []);
 
   const handleJoinChallenge = async (challengeId: string) => {
