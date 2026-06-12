@@ -508,15 +508,17 @@ export default function CalculatorPage() {
                 <p className="text-sm text-slate-500">Calculated Footprint Emissions</p>
                 <p className="text-4xl font-black text-slate-850 dark:text-white mt-1">{successData.footprint.totalEmissions} <span className="text-lg font-normal text-slate-500">kg CO₂</span></p>
 
-                <div className="border-t border-emerald-200 dark:border-emerald-900 mt-4 pt-4 text-left space-y-2">
-                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Rewards & Level-up Progress</p>
-                  <p className="text-sm font-bold text-slate-800 dark:text-white">⭐ Earned +{successData.gamification.pointsEarned} Points</p>
-                  <div className="space-y-1">
-                    {successData.gamification.messages.map((msg: string, i: number) => (
-                      <p key={i} className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">✓ {msg}</p>
-                    ))}
+                {successData.gamification && (
+                  <div className="border-t border-emerald-200 dark:border-emerald-900 mt-4 pt-4 text-left space-y-2">
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Rewards & Level-up Progress</p>
+                    <p className="text-sm font-bold text-slate-800 dark:text-white">⭐ Earned +{successData.gamification.pointsEarned} Points</p>
+                    <div className="space-y-1">
+                      {successData.gamification.messages?.map((msg: string, i: number) => (
+                        <p key={i} className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">✓ {msg}</p>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
               <div className="flex flex-col sm:flex-row justify-center gap-4 pt-4">

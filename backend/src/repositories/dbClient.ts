@@ -178,9 +178,7 @@ class DatabaseClient {
       console.log('⚡ PostgreSQL Database schema verified/created successfully.');
     } catch (err) {
       console.error('❌ Error executing database initialization schema:', err);
-      console.log('Falling back to local JSON database for reliability...');
-      this.usePostgres = false;
-      this.pool = null;
+      console.log('PostgreSQL database pool initialization failed (possibly database cold start). Keeping pool active for runtime retries...');
       this.initJsonDb();
     }
   }
