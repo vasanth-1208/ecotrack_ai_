@@ -17,7 +17,7 @@ export class AuthController {
         return res.status(409).json({ error: 'User with this email already exists' });
       }
 
-      const passwordHash = await bcrypt.hash(password, 10);
+      const passwordHash = await bcrypt.hash(password, 12);
       const userId = Math.random().toString(36).substring(2, 11) + '-' + Date.now().toString(36);
 
       const newUser: User = {
@@ -46,7 +46,7 @@ export class AuthController {
         earnedAt: new Date().toISOString(),
       });
 
-      const token = jwt.sign({ id: created.id, email: created.email }, JWT_SECRET, { expiresIn: '24h' });
+      const token = jwt.sign({ id: created.id, email: created.email }, JWT_SECRET, { expiresIn: '7d' });
 
       return res.status(201).json({
         token,
@@ -106,7 +106,7 @@ export class AuthController {
 
       await dbClient.updateUserStats(user.id, user.points, expectedLevel, newStreak, today);
 
-      const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
+      const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
 
       return res.status(200).json({
         token,
@@ -330,7 +330,7 @@ export class AuthController {
       await dbClient.saveReadProgress(userId, 'art-footprint', new Date().toISOString());
 
       // 6. Sign JWT token
-      const token = jwt.sign({ id: userId, email: demoEmail }, JWT_SECRET, { expiresIn: '24h' });
+      const token = jwt.sign({ id: userId, email: demoEmail }, JWT_SECRET, { expiresIn: '7d' });
 
       return res.status(200).json({
         token,

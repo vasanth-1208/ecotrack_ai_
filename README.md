@@ -34,6 +34,84 @@ EcoTrack AI is not just a carbon footprint calculator—it is an intelligent sus
 
 ---
 
+## 🔐 Security Hardening
+
+EcoTrack AI is built with explicit security controls that are easy to audit:
+
+* **Helmet**: `app.use(helmet())` protects common HTTP headers in `backend/src/index.ts`.
+* **Rate Limiting**: `express-rate-limit` is applied to API and auth routes with a `15 minute` window and `100` requests for general API traffic.
+* **Password Hashing**: `bcrypt.hash(password, 12)` is used for registration hashing.
+* **JWT Expiration**: session tokens expire after `7d` using `jwt.sign(..., { expiresIn: '7d' })`.
+* **Validation**: `zod` schemas validate auth, goals, budgets, and footprint payloads before controller logic runs.
+* **Trust Proxy + CORS**: the backend sets `trust proxy` and keeps middleware centralized for safer deployment behavior.
+
+---
+
+## 🏗️ Software Architecture
+
+EcoTrack AI follows a layered architecture that keeps responsibilities separated:
+
+```text
+Controllers
+    ↓
+Services
+    ↓
+Repositories
+    ↓
+Database Layer
+```
+
+This architecture improves maintainability, scalability, testability, and separation of concerns.
+
+### Design Patterns
+
+* **Repository Pattern**
+* **Service Pattern**
+* **Dependency Injection Principles**
+* **Configuration Pattern**
+* **Factory-style Provider Selection** for PostgreSQL / JSON fallback
+
+### Layer Responsibilities
+
+* **Controller Layer**: request handling, response formatting, and orchestration.
+* **Service Layer**: AI logic, PDF generation, predictions, simulation, and scoring.
+* **Repository Layer**: local JSON DB / persistent data access.
+* **Middleware Layer**: validation, auth, and rate limiting.
+* **Utility Layer**: reusable formatting, constants, and helper functions.
+
+### TypeScript Strict Mode
+
+TypeScript strict mode is enabled in both backend and frontend builds to catch unsafe state early:
+
+* `backend/tsconfig.json`
+* `frontend/tsconfig.json`
+
+---
+
+## 📁 Folder Structure
+
+```text
+backend/
+├── controllers/
+├── services/
+├── repositories/
+├── middleware/
+├── utils/
+├── config/
+
+frontend/
+├── app/
+├── components/
+├── hooks/
+├── lib/
+├── types/
+├── constants/
+```
+
+The frontend also uses shared reusable UI pieces for dashboards, gamification, and PWA support.
+
+---
+
 ## 🌍 Real-World Impact
 
 EcoTrack AI transforms environmental awareness into measurable action. Users can:
@@ -132,6 +210,18 @@ Security features include:
 * **Test Coverage**: Exceeds the >80% threshold.
 * **Responsive Layout**: Mobile-first responsive grids.
 * **WCAG 2.1 Compliance**: Accessible keyboard hotkeys, screen reader semantic structure, and clear contrast states.
+
+---
+
+## 🖼️ Project & API Screenshots
+
+Available in the deployed application:
+
+* Dashboard Overview
+* AI Sustainability Coach
+* Carbon Calculator
+* Gamification Hub
+* Swagger API Documentation
 
 ---
 
