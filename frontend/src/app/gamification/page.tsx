@@ -1,33 +1,40 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { AUTH_PROFILE_UPDATED_EVENT, api } from '../../lib/api';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { api } from '../../lib/api';
+import StreakCalendar from '../../components/gamification/StreakCalendar';
+import { buildStreakCalendar } from '../../utils/ecotrack';
+import { useUserProfile } from '../../hooks/useUserProfile';
+import type { Badge, Challenge, LeaderboardEntry } from '../../types/ecotrack';
 
 export default function GamificationPage() {
-  const [profile, setProfile] = useState<any>(null);
-  const [challenges, setChallenges] = useState<any[]>([]);
-  const [leaderboard, setLeaderboard] = useState<any[]>([]);
-  const [badges, setBadges] = useState<any[]>([]);
+  const { profile } = useUserProfile();
+  const [challenges, setChallenges] = useState<Challenge[]>([]);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [badges, setBadges] = useState<Badge[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  const fetchGamificationData = async () => {
+  const streakCalendar = useMemo(
+    () => buildStreakCalendar(profile?.lastActiveDate, profile?.streakDays),
+    [profile?.lastActiveDate, profile?.streakDays]
+  );
+
+  const fetchGamificationData = useCallback(async () => {
     try {
-      const meRes = await api.auth.me();
-      setProfile(meRes.user);
+      const [challengeResult, leaderboardResult, badgeResult] = await Promise.all([
+        api.gamification.getChallenges(),
+        api.gamification.getLeaderboard(),
+        api.gamification.getBadges(),
+      ]);
 
-      const chRes = await api.gamification.getChallenges();
-      setChallenges(chRes.challenges);
-
-      const ldRes = await api.gamification.getLeaderboard();
-      setLeaderboard(ldRes.leaderboard);
-
-      const bdRes = await api.gamification.getBadges();
-      setBadges(bdRes.badges);
-    } catch (err) {
-      console.error(err);
+      setChallenges(challengeResult.challenges || []);
+      setLeaderboard(leaderboardResult.leaderboard || []);
+      setBadges(badgeResult.badges || []);
+    } catch (error) {
+      console.error(error);
     }
-  };
+  }, []);
 
   useEffect(() => {
     const init = async () => {
@@ -36,54 +43,32 @@ export default function GamificationPage() {
       setLoading(false);
     };
 
-    const handleProfileUpdate = (event: Event) => {
-      const updatedProfile = (event as CustomEvent).detail;
-      if (!updatedProfile) return;
-
-      setProfile((current: any) => ({ ...current, ...updatedProfile }));
-      setLeaderboard((entries) =>
-        entries.map((entry) =>
-          entry.userId === updatedProfile.id
-            ? {
-                ...entry,
-                points: updatedProfile.points,
-                level: updatedProfile.level,
-              }
-            : entry
-        )
-      );
-    };
-
     init();
-    window.addEventListener(AUTH_PROFILE_UPDATED_EVENT, handleProfileUpdate);
-
-    return () => window.removeEventListener(AUTH_PROFILE_UPDATED_EVENT, handleProfileUpdate);
-  }, []);
+  }, [fetchGamificationData]);
 
   const handleJoinChallenge = async (challengeId: string) => {
     setActionLoading(challengeId);
     try {
       await api.gamification.joinChallenge(challengeId);
       await fetchGamificationData();
-    } catch (err) {
-      console.error(err);
+    } catch (error) {
+      console.error(error);
     } finally {
       setActionLoading(null);
     }
   };
 
-  const handleIncrementProgress = async (challengeId: string, currentProg: number) => {
+  const handleIncrementProgress = async (challengeId: string, currentProgress: number) => {
     setActionLoading(challengeId);
     try {
-      // Increment progress by 25% increments
-      const nextProg = Math.min(100, currentProg + 25);
-      const res = await api.gamification.logProgress(challengeId, nextProg);
-      if (res.status === 'completed') {
-        alert(`🎉 Challenge Completed! Reward: +${res.rewards.pointsEarned} Points!`);
+      const nextProgress = Math.min(100, currentProgress + 25);
+      const result = await api.gamification.logProgress(challengeId, nextProgress);
+      if (result.status === 'completed') {
+        alert(`🎉 Challenge Completed! Reward: +${result.rewards?.pointsEarned || 0} Points!`);
       }
       await fetchGamificationData();
-    } catch (err) {
-      console.error(err);
+    } catch (error) {
+      console.error(error);
     } finally {
       setActionLoading(null);
     }
@@ -102,72 +87,82 @@ export default function GamificationPage() {
 
   return (
     <div className="flex-1 bg-slate-50 dark:bg-slate-950 p-4 sm:p-6 lg:p-8">
-      
-      {/* Top Banner stats */}
-      <div className="max-w-7xl mx-auto mb-8 bg-gradient-to-r from-emerald-900 to-emerald-950 rounded-2xl p-6 text-white shadow-lg flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-        <div>
-          <span className="text-xs uppercase font-bold tracking-widest text-emerald-400">EcoTrack Gamification Hub</span>
-          <h1 className="text-3xl font-black mt-1">Hello, {profile?.fullName}!</h1>
-          <p className="text-slate-300 text-sm mt-1">Streaks active: {profile?.streakDays} day(s) 🔥 | Earn points to level up!</p>
+      <div className="max-w-7xl mx-auto mb-8 grid grid-cols-1 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.8fr)] gap-6">
+        <div className="bg-gradient-to-r from-emerald-900 to-emerald-950 rounded-2xl p-6 text-white shadow-lg flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+          <div>
+            <span className="text-xs uppercase font-bold tracking-widest text-emerald-400">EcoTrack Gamification Hub</span>
+            <h1 className="text-3xl font-black mt-1">Hello, {profile?.fullName || 'EcoTrack User'}!</h1>
+            <p className="text-slate-300 text-sm mt-1">
+              Streaks active: {profile?.streakDays || 0} day(s) 🔥 | Earn points to level up!
+            </p>
+          </div>
+
+          <div className="flex items-center gap-6">
+            <div className="text-center bg-emerald-900/60 border border-emerald-800 p-3 rounded-xl min-w-24">
+              <span className="text-xs text-emerald-400 uppercase font-semibold">User Level</span>
+              <p className="text-2xl font-black mt-0.5">Lvl {profile?.level || 1}</p>
+            </div>
+            <div className="text-center bg-emerald-900/60 border border-emerald-800 p-3 rounded-xl min-w-24">
+              <span className="text-xs text-amber-400 uppercase font-semibold">Total Stars</span>
+              <p className="text-2xl font-black mt-0.5">⭐ {profile?.points || 0}</p>
+            </div>
+          </div>
         </div>
 
-        <div className="flex items-center gap-6">
-          <div className="text-center bg-emerald-900/60 border border-emerald-800 p-3 rounded-xl min-w-24">
-            <span className="text-xs text-emerald-400 uppercase font-semibold">User Level</span>
-            <p className="text-2xl font-black mt-0.5">Lvl {profile?.level}</p>
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-lg font-bold text-slate-850 dark:text-white">7 Day Green Streak</h2>
+              <p className="text-xs text-slate-500 mt-1">Recent active days contribute to your momentum score.</p>
+            </div>
+            <div className="text-right">
+              <p className="text-2xl font-black text-emerald-700 dark:text-emerald-400">{profile?.streakDays || 0}</p>
+              <p className="text-[10px] uppercase tracking-wider text-slate-400">Days Active</p>
+            </div>
           </div>
-          <div className="text-center bg-emerald-900/60 border border-emerald-800 p-3 rounded-xl min-w-24">
-            <span className="text-xs text-amber-400 uppercase font-semibold">Total Stars</span>
-            <p className="text-2xl font-black mt-0.5">⭐ {profile?.points}</p>
-          </div>
+          <StreakCalendar days={streakCalendar} />
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* Left Column: Challenges & Badges */}
         <div className="lg:col-span-8 space-y-6">
-          
-          {/* Active Campaigns / Challenges */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6">
             <h2 className="text-lg font-bold text-slate-850 dark:text-white mb-2">AI-Generated Eco Challenges</h2>
-            <p className="text-xs text-slate-500 mb-6">Dynamically generated based on your highest emission categories (SDG Aligned).</p>
+            <p className="text-xs text-slate-500 mb-6">Dynamically generated based on your highest emission categories (SDG aligned).</p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {challenges.map((ch) => {
-                const isJoined = ch.status === 'joined';
-                const isCompleted = ch.status === 'completed';
-                const isNotJoined = ch.status === 'not_joined';
+              {challenges.map((challenge) => {
+                const isJoined = challenge.status === 'joined';
+                const isCompleted = challenge.status === 'completed';
+                const isNotJoined = challenge.status === 'not_joined';
 
                 return (
-                  <div key={ch.id} className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/50 dark:border-slate-800/50 flex flex-col justify-between space-y-4">
+                  <div key={challenge.id} className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/50 dark:border-slate-800/50 flex flex-col justify-between space-y-4">
                     <div>
                       <div className="flex justify-between items-start gap-2">
                         <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400 text-[10px] font-bold rounded uppercase">
-                          {ch.category}
+                          {challenge.category}
                         </span>
-                        <span className="text-xs font-bold text-amber-500">⭐ +{ch.points} pts</span>
+                        <span className="text-xs font-bold text-amber-500">⭐ +{challenge.points} pts</span>
                       </div>
-                      <h3 className="font-bold text-slate-800 dark:text-white text-sm mt-2">{ch.title}</h3>
-                      <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">{ch.description}</p>
+                      <h3 className="font-bold text-slate-800 dark:text-white text-sm mt-2">{challenge.title}</h3>
+                      <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">{challenge.description}</p>
                     </div>
 
                     <div className="space-y-3">
-                      {/* Progress bar for joined challenges */}
                       {isJoined && (
                         <div>
                           <div className="w-full bg-slate-200 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
-                            <div className="bg-emerald-600 h-full transition-all" style={{ width: `${ch.progress}%` }}></div>
+                            <div className="bg-emerald-600 h-full transition-all" style={{ width: `${challenge.progress || 0}%` }}></div>
                           </div>
-                          <span className="text-[10px] text-slate-500 mt-1 block font-semibold">Progress: {ch.progress}%</span>
+                          <span className="text-[10px] text-slate-500 mt-1 block font-semibold">Progress: {challenge.progress || 0}%</span>
                         </div>
                       )}
 
-                      {/* Action buttons */}
                       {isNotJoined && (
                         <button
-                          onClick={() => handleJoinChallenge(ch.id)}
-                          disabled={actionLoading === ch.id}
+                          onClick={() => handleJoinChallenge(challenge.id)}
+                          disabled={actionLoading === challenge.id}
                           className="w-full py-2 bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs rounded-lg transition-all"
                         >
                           Join Campaign
@@ -176,8 +171,8 @@ export default function GamificationPage() {
 
                       {isJoined && (
                         <button
-                          onClick={() => handleIncrementProgress(ch.id, ch.progress)}
-                          disabled={actionLoading === ch.id}
+                          onClick={() => handleIncrementProgress(challenge.id, challenge.progress || 0)}
+                          disabled={actionLoading === challenge.id}
                           className="w-full py-2 bg-slate-200 dark:bg-slate-800 hover:bg-slate-350 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-lg transition-all"
                         >
                           +25% Progress Log
@@ -196,7 +191,6 @@ export default function GamificationPage() {
             </div>
           </div>
 
-          {/* Badges Case */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6">
             <h2 className="text-lg font-bold text-slate-850 dark:text-white mb-2">Earned Eco Badges</h2>
             <p className="text-xs text-slate-500 mb-6">Complete milestones, log footprints, and achieve goals to earn premium awards.</p>
@@ -208,13 +202,13 @@ export default function GamificationPage() {
                 { id: 'CARBON_REDUCER', name: 'Carbon Reducer', desc: 'Reduced carbon by 10%', icon: '📉' },
                 { id: 'CLIMATE_CHAMPION', name: 'Climate Champion', desc: 'Rehearsed Level 5 status', icon: '🏆' },
               ].map((badgeTemplate) => {
-                const earned = badges.some(b => b.badgeType === badgeTemplate.id);
+                const earned = badges.some((badge) => badge.badgeType === badgeTemplate.id);
                 return (
-                  <div 
-                    key={badgeTemplate.id} 
+                  <div
+                    key={badgeTemplate.id}
                     className={`p-4 rounded-xl border text-center flex flex-col items-center justify-between ${
-                      earned 
-                        ? 'bg-emerald-50/20 border-emerald-700 dark:bg-emerald-950/10' 
+                      earned
+                        ? 'bg-emerald-50/20 border-emerald-700 dark:bg-emerald-950/10'
                         : 'bg-slate-50/50 border-slate-200 dark:border-slate-800/80 grayscale opacity-40'
                     }`}
                   >
@@ -233,10 +227,8 @@ export default function GamificationPage() {
               })}
             </div>
           </div>
-
         </div>
 
-        {/* Right Column: Leaderboard */}
         <div className="lg:col-span-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6 flex flex-col h-fit">
           <h2 className="text-lg font-bold text-slate-850 dark:text-white mb-2">Community Leaderboard</h2>
           <p className="text-xs text-slate-500 mb-6">Compare points and sustainability scores with fellow climate citizens anonymously.</p>
@@ -245,7 +237,7 @@ export default function GamificationPage() {
             {leaderboard.map((entry) => {
               const isMe = entry.userId === profile?.id;
               return (
-                <div 
+                <div
                   key={entry.userId}
                   className={`p-3 rounded-xl border flex items-center justify-between transition-all ${
                     isMe
@@ -254,12 +246,17 @@ export default function GamificationPage() {
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <span className={`w-6 h-6 flex items-center justify-center font-black text-xs rounded-full ${
-                      entry.rank === 1 ? 'bg-amber-400 text-slate-950' :
-                      entry.rank === 2 ? 'bg-slate-350 text-slate-900' :
-                      entry.rank === 3 ? 'bg-amber-700 text-white' :
-                      'bg-slate-200 dark:bg-slate-800 text-slate-500'
-                    }`}>
+                    <span
+                      className={`w-6 h-6 flex items-center justify-center font-black text-xs rounded-full ${
+                        entry.rank === 1
+                          ? 'bg-amber-400 text-slate-950'
+                          : entry.rank === 2
+                            ? 'bg-slate-350 text-slate-900'
+                            : entry.rank === 3
+                              ? 'bg-amber-700 text-white'
+                              : 'bg-slate-200 dark:bg-slate-800 text-slate-500'
+                      }`}
+                    >
                       {entry.rank}
                     </span>
                     <div>
@@ -275,7 +272,6 @@ export default function GamificationPage() {
             })}
           </div>
         </div>
-
       </div>
     </div>
   );

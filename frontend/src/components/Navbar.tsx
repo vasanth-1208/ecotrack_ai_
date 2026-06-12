@@ -3,57 +3,19 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { AUTH_PROFILE_UPDATED_EVENT, removeAuthToken, api } from '../lib/api';
+import { removeAuthToken, api } from '../lib/api';
+import { useUserProfile } from '../hooks/useUserProfile';
 
 export const Navbar: React.FC = () => {
   const pathname = usePathname();
   const router = useRouter();
-  const [userStats, setUserStats] = React.useState<{ points: number; level: number; fullName: string; isPremium: boolean } | null>(null);
-
-  // Load user profile statistics dynamically on mount/pathname change
-  React.useEffect(() => {
-    if (pathname === '/auth') return;
-
-    const loadUserStats = () => api.auth.me()
-      .then(res => {
-        setUserStats({
-          points: res.user.points,
-          level: res.user.level,
-          fullName: res.user.fullName,
-          isPremium: !!res.user.isPremium
-        });
-      })
-      .catch(() => {
-        // user unauthorized
-      });
-
-    const handleProfileUpdate = (event: Event) => {
-      const profile = (event as CustomEvent).detail;
-      if (!profile) return;
-
-      setUserStats({
-        points: profile.points,
-        level: profile.level,
-        fullName: profile.fullName,
-        isPremium: !!profile.isPremium
-      });
-    };
-
-    loadUserStats();
-    window.addEventListener(AUTH_PROFILE_UPDATED_EVENT, handleProfileUpdate);
-    window.addEventListener('focus', loadUserStats);
-
-    return () => {
-      window.removeEventListener(AUTH_PROFILE_UPDATED_EVENT, handleProfileUpdate);
-      window.removeEventListener('focus', loadUserStats);
-    };
-  }, [pathname]);
+  const { profile: userStats, refreshProfile } = useUserProfile();
 
   const handleUpgrade = async () => {
     try {
       const res = await api.auth.upgrade();
       if (res.isPremium) {
-        setUserStats(prev => prev ? { ...prev, isPremium: true } : null);
+        await refreshProfile();
         if (typeof window !== 'undefined') {
           const confetti = (await import('canvas-confetti')).default;
           confetti({

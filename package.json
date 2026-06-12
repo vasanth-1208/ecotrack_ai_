@@ -9,7 +9,10 @@
   "scripts": {
     "build:backend": "npm run build --workspace=backend",
     "build:frontend": "npm run build --workspace=frontend",
-    "build": "npm run build:backend && npm run build:frontend"
+    "build": "npm run build:backend && npm run build:frontend",
+    "lint:frontend": "npm run lint --workspace=frontend",
+    "test:backend": "npm test --workspace=backend",
+    "test": "npm run test:backend"
   },
   "supportedArchitectures": {
     "os": ["current", "linux"],

@@ -33,7 +33,7 @@ export default function CoachPage() {
         setChatHistory([
           {
             role: 'model',
-            parts: `Hello! I'm your AI Sustainability Coach. I've audited your latest footprint of **${Math.round(insRes.insights.roadmap.recommendedOffsetsKg * 2)} kg CO₂**. Your highest contributor is analyzed on the left pane. Ask me any environmental questions or ask about specific strategies!`
+            parts: `Hello! I'm your AI Sustainability Coach. I've audited your latest footprint of **${Math.round((insRes.insights.roadmap.recommendedOffsetsKg ?? 0) * 2)} kg CO₂**. Your highest contributor is analyzed on the left pane. Ask me any environmental questions or ask about specific strategies!`
           }
         ]);
       } catch (err) {

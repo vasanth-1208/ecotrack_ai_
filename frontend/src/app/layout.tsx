@@ -4,12 +4,24 @@ import './globals.css';
 import Navbar from '../components/Navbar';
 import AccessibilityPanel from '../components/AccessibilityPanel';
 import SimulatorModal from '../components/SimulatorModal';
+import ServiceWorkerRegistration from '../components/pwa/ServiceWorkerRegistration';
+import { APP_DESCRIPTION, APP_NAME, APP_THEME_COLOR } from '../constants/ecotrack';
 
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'EcoTrack AI - Carbon Footprint Tracking & Reduction Platform',
-  description: 'AI-Powered Sustainability Coach, carbon budget calculator, ESG/SDG aligned challenges, and interactive reduction dashboards.',
+  applicationName: APP_NAME,
+  title: APP_NAME,
+  description: APP_DESCRIPTION,
+  manifest: '/manifest.webmanifest',
+  icons: {
+    icon: '/icon',
+    apple: '/apple-icon',
+  },
+};
+
+export const viewport = {
+  themeColor: APP_THEME_COLOR,
 };
 
 export default function RootLayout({
@@ -26,6 +38,7 @@ export default function RootLayout({
         </main>
         <AccessibilityPanel />
         <SimulatorModal />
+        <ServiceWorkerRegistration />
       </body>
     </html>
   );

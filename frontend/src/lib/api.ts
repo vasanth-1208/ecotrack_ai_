@@ -1,52 +1,24 @@
+import type {
+  AuthProfile,
+  AuthResponse,
+  Article,
+  Badge,
+  CarbonFootprint,
+  Challenge,
+  Goal,
+  GoalInput,
+  GoalProbability,
+  LeaderboardEntry,
+  PredictionPoint,
+  Quiz,
+  RewardsPayload,
+} from '../types/ecotrack';
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 const LOCAL_FOOTPRINT_HISTORY_PREFIX = 'ecotrack_footprints_';
 const LOCAL_AUTH_PROFILE_PREFIX = 'ecotrack_profile_';
 const LOCAL_GOALS_PREFIX = 'ecotrack_goals_';
 export const AUTH_PROFILE_UPDATED_EVENT = 'ecotrack-auth-profile-updated';
-
-type StoredFootprint = {
-  date: string;
-  [key: string]: unknown;
-};
-
-type AuthProfile = {
-  fullName: string;
-  points: number;
-  level: number;
-  carbonBudget: number;
-  isPremium?: boolean;
-  [key: string]: unknown;
-};
-
-type AuthResponse = {
-  token: string;
-  user?: AuthProfile;
-};
-
-type RewardsPayload = {
-  totalPoints?: number;
-  level?: number;
-  newLevel?: number;
-};
-
-type StoredGoal = {
-  id: string;
-  title: string;
-  category: 'transportation' | 'homeEnergy' | 'food' | 'shopping' | 'waste' | 'overall';
-  targetValue: number;
-  currentValue: number;
-  startDate: string;
-  targetDate: string;
-  status: 'active' | 'completed' | 'failed';
-  createdAt: string;
-};
-
-type GoalInput = {
-  title: string;
-  category: StoredGoal['category'];
-  targetValue: number;
-  targetDate: string;
-};
 
 export const getAuthToken = (): string | null => {
   if (typeof window !== 'undefined') {
@@ -72,11 +44,11 @@ const getLocalFootprintHistoryKey = (): string => {
   return `${LOCAL_FOOTPRINT_HISTORY_PREFIX}${token || 'anonymous'}`;
 };
 
-const isStoredFootprint = (value: unknown): value is StoredFootprint => {
-  return !!value && typeof value === 'object' && typeof (value as StoredFootprint).date === 'string';
+const isStoredFootprint = (value: unknown): value is CarbonFootprint => {
+  return !!value && typeof value === 'object' && typeof (value as CarbonFootprint).date === 'string';
 };
 
-const readLocalFootprintHistory = (): StoredFootprint[] => {
+const readLocalFootprintHistory = (): CarbonFootprint[] => {
   if (typeof window === 'undefined') return [];
 
   try {
@@ -88,13 +60,13 @@ const readLocalFootprintHistory = (): StoredFootprint[] => {
   }
 };
 
-const writeLocalFootprintHistory = (history: StoredFootprint[]) => {
+const writeLocalFootprintHistory = (history: CarbonFootprint[]) => {
   if (typeof window === 'undefined') return;
   localStorage.setItem(getLocalFootprintHistoryKey(), JSON.stringify(history));
 };
 
-const mergeFootprintHistory = (serverHistory: unknown[], localHistory: StoredFootprint[]) => {
-  const byMonth = new Map<string, StoredFootprint>();
+const mergeFootprintHistory = (serverHistory: unknown[], localHistory: CarbonFootprint[]) => {
+  const byMonth = new Map<string, CarbonFootprint>();
 
   [...serverHistory, ...localHistory].forEach((footprint) => {
     if (isStoredFootprint(footprint)) {
@@ -145,9 +117,9 @@ const getLocalGoalsKey = (): string => {
   return `${LOCAL_GOALS_PREFIX}${token || 'anonymous'}`;
 };
 
-const isStoredGoal = (value: unknown): value is StoredGoal => {
+const isStoredGoal = (value: unknown): value is Goal => {
   if (!value || typeof value !== 'object') return false;
-  const goal = value as Partial<StoredGoal>;
+  const goal = value as Partial<Goal>;
   return (
     typeof goal.id === 'string' &&
     typeof goal.title === 'string' &&
@@ -161,7 +133,7 @@ const isStoredGoal = (value: unknown): value is StoredGoal => {
   );
 };
 
-const readLocalGoals = (): StoredGoal[] => {
+const readLocalGoals = (): Goal[] => {
   if (typeof window === 'undefined') return [];
 
   try {
@@ -173,13 +145,13 @@ const readLocalGoals = (): StoredGoal[] => {
   }
 };
 
-const writeLocalGoals = (goals: StoredGoal[]) => {
+const writeLocalGoals = (goals: Goal[]) => {
   if (typeof window === 'undefined') return;
   localStorage.setItem(getLocalGoalsKey(), JSON.stringify(goals));
 };
 
-const mergeGoals = (serverGoals: unknown[], localGoals: StoredGoal[]) => {
-  const byId = new Map<string, StoredGoal>();
+const mergeGoals = (serverGoals: unknown[], localGoals: Goal[]) => {
+  const byId = new Map<string, Goal>();
 
   [...serverGoals, ...localGoals].forEach((goal) => {
     if (isStoredGoal(goal)) {
@@ -192,14 +164,14 @@ const mergeGoals = (serverGoals: unknown[], localGoals: StoredGoal[]) => {
 
 const getGoalCurrentValue = (goalData: GoalInput): number => {
   const history = readLocalFootprintHistory();
-  const latest = history[history.length - 1] as StoredFootprint | undefined;
+  const latest = history[history.length - 1];
   if (!latest) return 400;
 
   if (goalData.category === 'overall') {
     return typeof latest.totalEmissions === 'number' ? latest.totalEmissions : 400;
   }
 
-  const categoryKeyByGoal: Record<Exclude<StoredGoal['category'], 'overall'>, string> = {
+  const categoryKeyByGoal: Record<Exclude<Goal['category'], 'overall'>, keyof CarbonFootprint> = {
     transportation: 'transportEmissions',
     homeEnergy: 'energyEmissions',
     food: 'foodEmissions',
@@ -211,10 +183,11 @@ const getGoalCurrentValue = (goalData: GoalInput): number => {
   return typeof currentValue === 'number' ? currentValue : 400;
 };
 
-const createLocalGoal = (goalData: GoalInput): StoredGoal => {
+const createLocalGoal = (goalData: GoalInput): Goal => {
   const now = new Date();
   return {
     id: `local-goal-${now.getTime()}-${Math.random().toString(36).substring(2, 8)}`,
+    userId: 'local-user',
     title: goalData.title,
     category: goalData.category,
     targetValue: goalData.targetValue,
@@ -267,7 +240,9 @@ const rememberRewards = (rewards: RewardsPayload | null | undefined) => {
   }
 };
 
-export async function apiRequest<T = any>(
+type ApiErrorResponse = { error?: string };
+
+export async function apiRequest<T = unknown>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
@@ -296,14 +271,14 @@ export async function apiRequest<T = any>(
   }
 
   if (!response.ok) {
-    const errData = await response.json().catch(() => ({}));
+    const errData = (await response.json().catch(() => ({}))) as ApiErrorResponse;
     throw new Error(errData.error || 'Network response was not ok');
   }
 
   // Handle PDF/binary downloads
   const contentType = response.headers.get('content-type');
   if (contentType && contentType.includes('application/pdf')) {
-    return response.blob() as any;
+    return (await response.blob()) as T;
   }
 
   return response.json();
@@ -371,8 +346,8 @@ export const api = {
     },
   },
   footprint: {
-    submit: async (inputs: any) => {
-      const result = await apiRequest('/footprint', {
+    submit: async (inputs: Record<string, unknown>) => {
+      const result = await apiRequest<{ footprint: CarbonFootprint; gamification?: RewardsPayload }>('/footprint', {
         method: 'POST',
         body: JSON.stringify(inputs),
       });
@@ -383,7 +358,7 @@ export const api = {
     getHistory: async () => {
       const localHistory = readLocalFootprintHistory();
       try {
-        const result = await apiRequest('/footprint/history');
+        const result = await apiRequest<{ history: CarbonFootprint[] }>('/footprint/history');
         return {
           ...result,
           history: mergeFootprintHistory(result.history || [], localHistory),
@@ -397,12 +372,12 @@ export const api = {
     },
   },
   predictions: {
-    get: () => apiRequest('/predictions'),
+    get: () => apiRequest<{ predictions: PredictionPoint[]; goalProbabilities: GoalProbability[] }>('/predictions'),
   },
   goals: {
     create: async (goalData: GoalInput) => {
       try {
-        const result = await apiRequest<{ goal: StoredGoal }>('/goals', {
+        const result = await apiRequest<{ goal: Goal }>('/goals', {
           method: 'POST',
           body: JSON.stringify(goalData),
         });
@@ -420,7 +395,7 @@ export const api = {
     list: async () => {
       const localGoals = readLocalGoals();
       try {
-        const result = await apiRequest<{ goals: StoredGoal[] }>('/goals');
+        const result = await apiRequest<{ goals: Goal[] }>('/goals');
         return {
           ...result,
           goals: mergeGoals(result.goals || [], localGoals),
@@ -434,7 +409,7 @@ export const api = {
     },
     update: async (id: string, currentValue: number) => {
       try {
-        const result = await apiRequest(`/goals/${id}`, {
+        const result = await apiRequest<{ message: string; status: Goal['status']; currentValue: number; rewards?: RewardsPayload | null }>(`/goals/${id}`, {
           method: 'PUT',
           body: JSON.stringify({ currentValue }),
         });
@@ -467,24 +442,24 @@ export const api = {
     },
   },
   gamification: {
-    getChallenges: () => apiRequest('/gamification/challenges'),
+    getChallenges: () => apiRequest<{ challenges: Challenge[] }>('/gamification/challenges'),
     joinChallenge: (id: string) =>
       apiRequest(`/gamification/challenges/${id}/join`, { method: 'POST' }),
     logProgress: async (id: string, progress: number) => {
-      const result = await apiRequest(`/gamification/challenges/${id}/progress`, {
+      const result = await apiRequest<{ status: string; rewards?: RewardsPayload | null }>(`/gamification/challenges/${id}/progress`, {
         method: 'POST',
         body: JSON.stringify({ progress }),
       });
       rememberRewards(result.rewards);
       return result;
     },
-    getLeaderboard: () => apiRequest('/gamification/leaderboard'),
-    getBadges: () => apiRequest('/gamification/badges'),
+    getLeaderboard: () => apiRequest<{ leaderboard: LeaderboardEntry[] }>('/gamification/leaderboard'),
+    getBadges: () => apiRequest<{ badges: Badge[] }>('/gamification/badges'),
   },
   ai: {
-    getInsights: () => apiRequest('/ai/insights'),
-    chat: (message: string, history: any[]) =>
-      apiRequest('/ai/coach', {
+    getInsights: () => apiRequest<{ sustainabilityScore: number; scoreBreakdown: { reductionScore: number; renewableScore: number; challengeScore: number; goalScore: number; learningScore: number }; insights: { roadmap: { immediateTargets: string[]; longTermGoals?: string[]; recommendedOffsetsKg?: number }; weeklyActionPlan: Array<{ habit: string; impact: string; difficulty: string; sdgAlignments?: string[] }>; spikeExplanation?: string } }>('/ai/insights'),
+    chat: (message: string, history: unknown[]) =>
+      apiRequest<{ reply: string }>('/ai/coach', {
         method: 'POST',
         body: JSON.stringify({ message, history }),
       }),
@@ -493,21 +468,21 @@ export const api = {
       return `${API_BASE_URL}/ai/report?token=${token}`;
     },
     // We can also fetch as blob and trigger download client-side
-    downloadReportBlob: () => apiRequest('/ai/report'),
+    downloadReportBlob: () => apiRequest<Blob>('/ai/report'),
   },
   offsets: {
     getRecommendations: () => apiRequest('/offsets'),
   },
   education: {
-    getArticles: () => apiRequest('/education/articles'),
+    getArticles: () => apiRequest<{ articles: Article[] }>('/education/articles'),
     readArticle: async (id: string) => {
-      const result = await apiRequest(`/education/articles/${id}/read`, { method: 'POST' });
+      const result = await apiRequest<{ message: string; rewards?: RewardsPayload | null }>(`/education/articles/${id}/read`, { method: 'POST' });
       rememberRewards(result.rewards);
       return result;
     },
-    getQuizzes: () => apiRequest('/education/quizzes'),
+    getQuizzes: () => apiRequest<{ quizzes: Quiz[] }>('/education/quizzes'),
     submitQuiz: async (id: string, score: number) => {
-      const result = await apiRequest(`/education/quizzes/${id}/submit`, {
+      const result = await apiRequest<{ message: string; score: number; maxScore: number; passed: boolean; rewards?: RewardsPayload | null }>(`/education/quizzes/${id}/submit`, {
         method: 'POST',
         body: JSON.stringify({ score }),
       });
@@ -516,8 +491,8 @@ export const api = {
     },
   },
   simulator: {
-    run: (inputs: any) =>
-      apiRequest('/simulator', {
+    run: (inputs: Record<string, unknown>) =>
+      apiRequest<{ result: unknown }>('/simulator', {
         method: 'POST',
         body: JSON.stringify(inputs),
       }),

@@ -1,135 +1,92 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
+import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/api';
+import { useUserProfile } from '../../hooks/useUserProfile';
 import {
-  ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid
-} from 'recharts';
+  buildLocalizedSuggestions,
+  buildWeeklyImpactSummary,
+  formatKg,
+  getIndiaBenchmarkText,
+} from '../../utils/ecotrack';
+import type {
+  CarbonFootprint,
+  DashboardInsights,
+  GoalProbability,
+  PredictionPoint,
+  ScoreBreakdown,
+  WeeklyAction,
+} from '../../types/ecotrack';
 
-type Footprint = {
-  date: string;
-  totalEmissions: number;
-  transportEmissions: number;
-  energyEmissions: number;
-  foodEmissions: number;
-  shoppingEmissions: number;
-  wasteEmissions: number;
-  inputs?: {
-    renewablePercentage?: number;
-  };
-};
+const DashboardCharts = dynamic(() => import('../../components/dashboard/DashboardCharts'), {
+  ssr: false,
+  loading: () => (
+    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6">
+      <div className="h-72 rounded-xl bg-slate-100 dark:bg-slate-800/40 animate-pulse" />
+    </div>
+  ),
+});
 
-type UserProfile = {
-  carbonBudget?: number;
-};
-
-type Prediction = {
-  date: string;
-  emissions: number;
-};
-
-type GoalProbability = {
-  goalTitle: string;
-  probabilityPercent: number;
-  projectedEmissionsAtDeadline: number;
-  statusText: string;
-};
-
-type ScoreBreakdown = {
-  reductionScore: number;
-  renewableScore: number;
-  challengeScore: number;
-  goalScore: number;
-  learningScore: number;
-};
-
-type WeeklyAction = {
-  habit: string;
-  impact: string;
-  difficulty: string;
-};
-
-type DashboardInsights = {
-  roadmap: {
-    immediateTargets: string[];
-  };
-  weeklyActionPlan: WeeklyAction[];
-};
-
-const getNextMonth = (dateStr: string, offsetMonths: number) => {
-  const [year, month] = dateStr.split('-').map(Number);
-  const date = new Date(year, month - 1 + offsetMonths, 1);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-};
-
-const buildFallbackPredictions = (footprints: Footprint[]): Prediction[] => {
-  const latest = footprints[footprints.length - 1];
+const buildFallbackPredictions = (history: CarbonFootprint[]): PredictionPoint[] => {
+  const latest = history[history.length - 1];
   if (!latest) return [];
 
   return Array.from({ length: 3 }).map((_, index) => ({
-    date: getNextMonth(latest.date, index + 1),
-    emissions: latest.totalEmissions,
+    date: `Forecast ${index + 1}`,
+    emissions: Math.max(0, latest.totalEmissions - index * 8),
   }));
 };
 
-const buildFallbackInsights = (footprints: Footprint[]) => {
-  const latest = footprints[footprints.length - 1];
-  const renewableScore = latest?.inputs?.renewablePercentage || 0;
-  const budgetAwareScore = latest?.totalEmissions <= 400 ? 65 : 45;
+const buildFallbackInsights = (history: CarbonFootprint[]) => {
+  const latest = history[history.length - 1];
+  const previous = history[history.length - 2];
+  const totalEmissions = latest?.totalEmissions ?? 0;
+  const delta = previous ? previous.totalEmissions - totalEmissions : 0;
+  const sustainabilityScore = Math.max(35, Math.min(95, Math.round(100 - totalEmissions / 6 + delta / 3)));
 
   return {
-    sustainabilityScore: Math.round((budgetAwareScore * 0.8) + (renewableScore * 0.2)),
-    scoreBreakdown: {
-      reductionScore: footprints.length > 1 ? 50 : 45,
-      renewableScore,
-      challengeScore: 50,
-      goalScore: 50,
-      learningScore: 0,
-    },
     insights: {
       roadmap: {
         immediateTargets: [
-          'Review your largest emissions category and choose one reduction habit for this week.',
-          'Set a monthly carbon budget goal so EcoTrack can track your progress.',
-          'Re-log next month to unlock trend comparisons and stronger recommendations.',
+          'Shift one commute to public transport or a shared ride.',
+          'Reduce home electricity use during peak hours.',
+          'Replace one high-emission meal with a plant-based option.',
         ],
       },
       weeklyActionPlan: [
-        { habit: 'Replace one car trip with public transport', impact: 'Medium CO2 reduction', difficulty: 'easy' },
-        { habit: 'Shift laundry and cooling to efficient settings', impact: 'Lower energy use', difficulty: 'easy' },
-        { habit: 'Plan meals before shopping', impact: 'Less food waste', difficulty: 'medium' },
+        { habit: 'Use shared transit', impact: 'Cuts transportation emissions', difficulty: 'easy' },
+        { habit: 'Lower AC usage', impact: 'Reduces electricity demand', difficulty: 'medium' },
+        { habit: 'Plan meals early', impact: 'Avoids food waste', difficulty: 'easy' },
       ],
+    },
+    sustainabilityScore,
+    scoreBreakdown: {
+      reductionScore: Math.max(0, Math.min(100, Math.round(70 + delta))),
+      renewableScore: 65,
+      challengeScore: 55,
+      goalScore: 50,
+      learningScore: 80,
     },
   };
 };
 
 export default function DashboardPage() {
+  const { profile, loading: profileLoading } = useUserProfile();
   const [loading, setLoading] = useState(true);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [history, setHistory] = useState<Footprint[]>([]);
-  const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [history, setHistory] = useState<CarbonFootprint[]>([]);
+  const [predictions, setPredictions] = useState<PredictionPoint[]>([]);
   const [goalProbs, setGoalProbs] = useState<GoalProbability[]>([]);
   const [insights, setInsights] = useState<DashboardInsights | null>(null);
   const [score, setScore] = useState<number>(0);
   const [scoreBreakdown, setScoreBreakdown] = useState<ScoreBreakdown | null>(null);
   const [error, setError] = useState('');
   const [pdfGenerating, setPdfGenerating] = useState(false);
-  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    const mountedTimer = window.setTimeout(() => setMounted(true), 0);
-
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
-        try {
-          const meRes = await api.auth.me();
-          setProfile(meRes.user);
-        } catch (profileErr: unknown) {
-          console.warn('Profile lookup failed, using dashboard defaults:', profileErr);
-          setProfile({ carbonBudget: 400 });
-        }
-
         const histRes = await api.footprint.getHistory();
         const footprintHistory = histRes.history || [];
         setHistory(footprintHistory);
@@ -168,8 +125,6 @@ export default function DashboardPage() {
     };
 
     fetchDashboardData();
-
-    return () => window.clearTimeout(mountedTimer);
   }, []);
 
   const triggerPDFDownload = async () => {
@@ -192,7 +147,94 @@ export default function DashboardPage() {
     }
   };
 
-  if (loading) {
+  const latest = useMemo(() => history[history.length - 1] || null, [history]);
+  const budget = profile?.carbonBudget || 400;
+  const emissions = latest?.totalEmissions || 0;
+  const budgetUsagePercent = Math.round((emissions / budget) * 100);
+  const summary = useMemo(() => buildWeeklyImpactSummary(history), [history]);
+  const localizedSuggestions = useMemo(() => buildLocalizedSuggestions(latest), [latest]);
+  const benchmark = useMemo(() => getIndiaBenchmarkText(emissions * 12), [emissions]);
+  const budgetState = useMemo(() => {
+    if (emissions > budget) {
+      return {
+        zoneText: 'Over Budget',
+        color: 'bg-red-500',
+        textCol: 'text-red-650 dark:text-red-400',
+        border: 'border-red-250',
+        emoji: '🔴',
+      };
+    }
+
+    if (budgetUsagePercent > 70) {
+      return {
+        zoneText: 'Warning Zone',
+        color: 'bg-amber-500',
+        textCol: 'text-amber-600 dark:text-amber-400',
+        border: 'border-amber-250',
+        emoji: '🟡',
+      };
+    }
+
+    return {
+      zoneText: 'Safe Zone',
+      color: 'bg-emerald-500',
+      textCol: 'text-emerald-600 dark:text-emerald-400',
+      border: 'border-emerald-250',
+      emoji: '🟢',
+    };
+  }, [budget, budgetUsagePercent, emissions]);
+
+  const {
+    zoneText: budgetZoneText,
+    color: budgetColor,
+    textCol: budgetTextCol,
+    border: budgetBorder,
+    emoji: budgetEmoji,
+  } = budgetState;
+
+  const {
+    pct: pctVsIndia,
+    isLower: isLowerThanIndia,
+    label: benchmarkLabel,
+    benchmark: indiaAvg,
+  } = benchmark;
+
+  const userAnnual = emissions * 12;
+
+  const pieData = useMemo(() => {
+    if (!latest) return [];
+    return [
+      { name: 'Transport', value: latest.transportEmissions, color: '#10B981' },
+      { name: 'Home Energy', value: latest.energyEmissions, color: '#3B82F6' },
+      { name: 'Food', value: latest.foodEmissions, color: '#F59E0B' },
+      { name: 'Shopping', value: latest.shoppingEmissions, color: '#EC4899' },
+      { name: 'Waste', value: latest.wasteEmissions, color: '#8B5CF6' },
+    ];
+  }, [latest]);
+
+  const lineData = useMemo(
+    () =>
+      history.map((item) => ({
+        name: item.date,
+        emissions: Math.round(item.totalEmissions),
+        type: 'Historical',
+      })),
+    [history]
+  );
+
+  const forecastData = useMemo(
+    () =>
+      predictions.map((pred) => ({
+        name: pred.date,
+        emissions: Math.round(pred.emissions),
+        type: 'Forecast',
+      })),
+    [predictions]
+  );
+
+  const fullTrendData = useMemo(() => [...lineData, ...forecastData], [lineData, forecastData]);
+
+  if (loading || profileLoading) {
     return (
       <div className="flex-1 bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -224,63 +266,6 @@ export default function DashboardPage() {
     );
   }
 
-  const latest = history[history.length - 1];
-
-  // Budget calculations
-  const budget = profile?.carbonBudget || 400;
-  const emissions = latest.totalEmissions || 0;
-  const budgetUsagePercent = Math.round((emissions / budget) * 100);
-  
-  let budgetZoneText = 'Safe Zone';
-  let budgetColor = 'bg-emerald-500';
-  let budgetTextCol = 'text-emerald-600 dark:text-emerald-400';
-  let budgetBorder = 'border-emerald-250';
-  let budgetEmoji = '🟢';
-
-  if (emissions > budget) {
-    budgetZoneText = 'Over Budget';
-    budgetColor = 'bg-red-500';
-    budgetTextCol = 'text-red-650 dark:text-red-400';
-    budgetBorder = 'border-red-250';
-    budgetEmoji = '🔴';
-  } else if (budgetUsagePercent > 70) {
-    budgetZoneText = 'Warning Zone';
-    budgetColor = 'bg-amber-500';
-    budgetTextCol = 'text-amber-600 dark:text-amber-400';
-    budgetBorder = 'border-amber-250';
-    budgetEmoji = '🟡';
-  }
-
-  // Recharts Pie Data
-  const pieData = [
-    { name: 'Transport', value: latest.transportEmissions, color: '#10B981' },
-    { name: 'Home Energy', value: latest.energyEmissions, color: '#3B82F6' },
-    { name: 'Food', value: latest.foodEmissions, color: '#F59E0B' },
-    { name: 'Shopping', value: latest.shoppingEmissions, color: '#EC4899' },
-    { name: 'Waste', value: latest.wasteEmissions, color: '#8B5CF6' },
-  ];
-
-  // Line Chart Trend Data (combined history + predictions)
-  const lineData = history.map(item => ({
-    name: item.date,
-    emissions: Math.round(item.totalEmissions),
-    type: 'Historical'
-  }));
-
-  const forecastData = predictions.map(pred => ({
-    name: pred.date,
-    emissions: Math.round(pred.emissions),
-    type: 'Forecast'
-  }));
-
-  const fullTrendData = [...lineData, ...forecastData];
-
-  // Benchmarking
-  const userAnnual = emissions * 12;
-  const indiaAvg = 1900;
-  const pctVsIndia = Math.round(Math.abs((userAnnual - indiaAvg) / indiaAvg) * 100);
-  const isLowerThanIndia = userAnnual <= indiaAvg;
-
   return (
     <div className="flex-1 bg-slate-50 dark:bg-slate-950 p-4 sm:p-6 lg:p-8">
       {/* Top Banner Row */}
@@ -306,6 +291,49 @@ export default function DashboardPage() {
             </>
           )}
         </button>
+      </div>
+
+      <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6 lg:col-span-2">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="font-bold text-slate-900 dark:text-white mb-1">Weekly Impact Summary</h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400">{summary.summaryLabel}</p>
+            </div>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 dark:bg-emerald-950/20 px-2.5 py-1 rounded-full">
+              {summary.trendLabel}
+            </span>
+          </div>
+          <div className="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-4 border border-slate-100 dark:border-slate-800">
+              <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">CO₂ Saved</p>
+              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1">{formatKg(summary.co2SavedKg)}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-4 border border-slate-100 dark:border-slate-800">
+              <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Estimated Savings</p>
+              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1">₹{summary.moneySavedInr}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 dark:bg-slate-800/40 p-4 border border-slate-100 dark:border-slate-800">
+              <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Tree Equivalent</p>
+              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1">{summary.treesEquivalent}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6">
+          <h3 className="font-bold text-slate-900 dark:text-white mb-3">Localized Suggestions</h3>
+          <div className="space-y-3">
+            {localizedSuggestions.slice(0, 3).map((suggestion) => (
+              <div key={suggestion} className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed flex gap-2">
+                <span className="text-emerald-500 font-bold">•</span>
+                <span>{suggestion}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            India benchmark: {benchmark.label} | {benchmark.pct}% gap
+          </div>
+        </div>
       </div>
 
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -348,7 +376,7 @@ export default function DashboardPage() {
               <div>
                 <h3 className="font-bold text-xs uppercase tracking-wider text-slate-400">National Benchmarking</h3>
                 <p className="text-3xl font-black text-slate-850 dark:text-white mt-1">
-                  {isLowerThanIndia ? '🟢 Under' : '🔴 Over'} India Avg
+                  {benchmarkLabel}
                 </p>
                 <p className="text-xs text-slate-500 mt-2 leading-relaxed font-medium">
                   You emit <span className="font-bold text-slate-850 dark:text-white">{pctVsIndia}% {isLowerThanIndia ? 'less' : 'more'}</span> CO₂ than the average Indian household ({indiaAvg} kg/year).
@@ -374,86 +402,25 @@ export default function DashboardPage() {
 
           </div>
 
-          {/* Recharts Graphics */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6">
-            <h3 className="font-bold text-slate-900 dark:text-white mb-4">Carbon Emission Forecasts & Trends</h3>
-            <div className="h-72">
-              {mounted ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={fullTrendData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.1} />
-                    <XAxis dataKey="name" stroke="#64748B" fontSize={11} />
-                    <YAxis stroke="#64748B" fontSize={11} label={{ value: 'kg CO₂', angle: -90, position: 'insideLeft' }} />
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: '#1E293B', border: 'none', borderRadius: '8px', color: '#FFF', fontSize: '12px' }}
-                      labelStyle={{ fontWeight: 'bold' }}
-                    />
-                    <Legend wrapperStyle={{ fontSize: '11px', fontWeight: 'semibold' }} />
-                    <Line name="Footprint History" type="monotone" dataKey="emissions" data={lineData} stroke="#10B981" strokeWidth={3} activeDot={{ r: 8 }} />
-                    <Line name="AI Prediction" type="monotone" dataKey="emissions" data={forecastData} stroke="#EF4444" strokeWidth={2} strokeDasharray="5 5" />
-                  </LineChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="h-full flex items-center justify-center bg-slate-100 dark:bg-slate-800/40 rounded-xl">
-                  <p className="text-xs text-slate-400">Loading trend charts...</p>
-                </div>
-              )}
-            </div>
-          </div>
+          <DashboardCharts trendData={fullTrendData} lineData={lineData} forecastData={forecastData} pieData={pieData} />
 
-          {/* Breakdown and Details */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Pie Chart Category Breakdown */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6">
-              <h3 className="font-bold text-slate-900 dark:text-white mb-4">Emissions Category Breakdown</h3>
-              <div className="h-64 flex items-center justify-center">
-                {mounted ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={pieData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={80}
-                        paddingAngle={5}
-                        dataKey="value"
-                      >
-                        {pieData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip contentStyle={{ fontSize: '12px' }} />
-                      <Legend layout="vertical" align="right" verticalAlign="middle" wrapperStyle={{ fontSize: '11px' }} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="h-full w-full flex items-center justify-center bg-slate-100 dark:bg-slate-800/40 rounded-xl">
-                    <p className="text-xs text-slate-400">Loading breakdown...</p>
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6 flex flex-col justify-between">
+            <div>
+              <h3 className="font-bold text-slate-900 dark:text-white mb-4">AI Recommended Roadmap</h3>
+              <div className="space-y-3.5">
+                {insights && insights.roadmap.immediateTargets.slice(0, 3).map((target: string, idx: number) => (
+                  <div key={idx} className="flex gap-2 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
+                    <span className="text-emerald-500 font-bold">•</span>
+                    <span>{target}</span>
                   </div>
-                )}
+                ))}
               </div>
             </div>
-
-            {/* AI Roadmaps & Recommendations */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6 flex flex-col justify-between">
-              <div>
-                <h3 className="font-bold text-slate-900 dark:text-white mb-4">AI Recommended Roadmap</h3>
-                <div className="space-y-3.5">
-                  {insights && insights.roadmap.immediateTargets.slice(0, 3).map((target: string, idx: number) => (
-                    <div key={idx} className="flex gap-2 text-sm leading-relaxed text-slate-655 dark:text-slate-400">
-                      <span className="text-emerald-500 font-bold">•</span>
-                      <span>{target}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="border-t border-slate-100 dark:border-slate-800 mt-4 pt-3.5 flex justify-between items-center">
-                <span className="text-xs text-slate-500 font-semibold uppercase">SDG 13 Climate Action</span>
-                <a href="/coach" className="text-xs text-emerald-700 dark:text-emerald-400 font-bold hover:underline">
-                  Consult AI Coach →
-                </a>
-              </div>
+            <div className="border-t border-slate-100 dark:border-slate-800 mt-4 pt-3.5 flex justify-between items-center">
+              <span className="text-xs text-slate-500 font-semibold uppercase">SDG 13 Climate Action</span>
+              <a href="/coach" className="text-xs text-emerald-700 dark:text-emerald-400 font-bold hover:underline">
+                Consult AI Coach →
+              </a>
             </div>
           </div>
 
@@ -527,10 +494,10 @@ export default function DashboardPage() {
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6">
             <h3 className="font-bold text-slate-900 dark:text-white mb-4">Goal Achievements Outlook</h3>
             
-            {goalProbs.length === 0 ? (
-              <p className="text-xs text-slate-500 leading-relaxed">
-                No active goals. Set a goal in the **Goals** tab to track achievement probabilities.
-              </p>
+              {goalProbs.length === 0 ? (
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  No active goals. Set a goal in the Goals tab to track achievement probabilities.
+                </p>
             ) : (
               <div className="space-y-4">
                 {goalProbs.map((gp, i) => (
