@@ -1,9 +1,44 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 const LOCAL_FOOTPRINT_HISTORY_PREFIX = 'ecotrack_footprints_';
+const LOCAL_AUTH_PROFILE_PREFIX = 'ecotrack_profile_';
+const LOCAL_GOALS_PREFIX = 'ecotrack_goals_';
 
 type StoredFootprint = {
   date: string;
   [key: string]: unknown;
+};
+
+type AuthProfile = {
+  fullName: string;
+  points: number;
+  level: number;
+  carbonBudget: number;
+  isPremium?: boolean;
+  [key: string]: unknown;
+};
+
+type AuthResponse = {
+  token: string;
+  user?: AuthProfile;
+};
+
+type StoredGoal = {
+  id: string;
+  title: string;
+  category: 'transportation' | 'homeEnergy' | 'food' | 'shopping' | 'waste' | 'overall';
+  targetValue: number;
+  currentValue: number;
+  startDate: string;
+  targetDate: string;
+  status: 'active' | 'completed' | 'failed';
+  createdAt: string;
+};
+
+type GoalInput = {
+  title: string;
+  category: StoredGoal['category'];
+  targetValue: number;
+  targetDate: string;
 };
 
 export const getAuthToken = (): string | null => {
@@ -70,6 +105,131 @@ const rememberFootprint = (footprint: unknown) => {
   writeLocalFootprintHistory(history);
 };
 
+const getLocalAuthProfileKey = (token = getAuthToken()): string => {
+  return `${LOCAL_AUTH_PROFILE_PREFIX}${token || 'anonymous'}`;
+};
+
+const normalizeAuthProfile = (value: unknown): AuthProfile | null => {
+  if (!value || typeof value !== 'object') return null;
+
+  const profile = value as Partial<AuthProfile>;
+  return {
+    ...profile,
+    fullName: typeof profile.fullName === 'string' ? profile.fullName : 'EcoTrack User',
+    points: typeof profile.points === 'number' ? profile.points : 0,
+    level: typeof profile.level === 'number' ? profile.level : 1,
+    carbonBudget: typeof profile.carbonBudget === 'number' ? profile.carbonBudget : 400,
+    isPremium: !!profile.isPremium,
+  };
+};
+
+const rememberAuthProfile = (response: AuthResponse) => {
+  if (typeof window === 'undefined') return;
+
+  const profile = normalizeAuthProfile(response.user);
+  if (!profile) return;
+
+  localStorage.setItem(getLocalAuthProfileKey(response.token), JSON.stringify(profile));
+};
+
+const getLocalGoalsKey = (): string => {
+  const token = getAuthToken();
+  return `${LOCAL_GOALS_PREFIX}${token || 'anonymous'}`;
+};
+
+const isStoredGoal = (value: unknown): value is StoredGoal => {
+  if (!value || typeof value !== 'object') return false;
+  const goal = value as Partial<StoredGoal>;
+  return (
+    typeof goal.id === 'string' &&
+    typeof goal.title === 'string' &&
+    typeof goal.category === 'string' &&
+    typeof goal.targetValue === 'number' &&
+    typeof goal.currentValue === 'number' &&
+    typeof goal.startDate === 'string' &&
+    typeof goal.targetDate === 'string' &&
+    typeof goal.status === 'string' &&
+    typeof goal.createdAt === 'string'
+  );
+};
+
+const readLocalGoals = (): StoredGoal[] => {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const raw = localStorage.getItem(getLocalGoalsKey());
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter(isStoredGoal) : [];
+  } catch {
+    return [];
+  }
+};
+
+const writeLocalGoals = (goals: StoredGoal[]) => {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(getLocalGoalsKey(), JSON.stringify(goals));
+};
+
+const mergeGoals = (serverGoals: unknown[], localGoals: StoredGoal[]) => {
+  const byId = new Map<string, StoredGoal>();
+
+  [...serverGoals, ...localGoals].forEach((goal) => {
+    if (isStoredGoal(goal)) {
+      byId.set(goal.id, goal);
+    }
+  });
+
+  return Array.from(byId.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+};
+
+const getGoalCurrentValue = (goalData: GoalInput): number => {
+  const history = readLocalFootprintHistory();
+  const latest = history[history.length - 1] as StoredFootprint | undefined;
+  if (!latest) return 400;
+
+  if (goalData.category === 'overall') {
+    return typeof latest.totalEmissions === 'number' ? latest.totalEmissions : 400;
+  }
+
+  const categoryKeyByGoal: Record<Exclude<StoredGoal['category'], 'overall'>, string> = {
+    transportation: 'transportEmissions',
+    homeEnergy: 'energyEmissions',
+    food: 'foodEmissions',
+    shopping: 'shoppingEmissions',
+    waste: 'wasteEmissions',
+  };
+
+  const currentValue = latest[categoryKeyByGoal[goalData.category]];
+  return typeof currentValue === 'number' ? currentValue : 400;
+};
+
+const createLocalGoal = (goalData: GoalInput): StoredGoal => {
+  const now = new Date();
+  return {
+    id: `local-goal-${now.getTime()}-${Math.random().toString(36).substring(2, 8)}`,
+    title: goalData.title,
+    category: goalData.category,
+    targetValue: goalData.targetValue,
+    currentValue: getGoalCurrentValue(goalData),
+    startDate: now.toISOString().split('T')[0],
+    targetDate: goalData.targetDate,
+    status: 'active',
+    createdAt: now.toISOString(),
+  };
+};
+
+const readLocalAuthProfile = (): AuthProfile | null => {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const raw = localStorage.getItem(getLocalAuthProfileKey());
+    const parsed = raw ? JSON.parse(raw) : null;
+    return normalizeAuthProfile(parsed);
+  } catch {
+    return null;
+  }
+};
+
 export async function apiRequest<T = any>(
   endpoint: string,
   options: RequestInit = {}
@@ -114,26 +274,55 @@ export async function apiRequest<T = any>(
 
 export const api = {
   auth: {
-    register: (email: string, password: string, fullName: string) =>
-      apiRequest('/auth/register', {
+    register: async (email: string, password: string, fullName: string) => {
+      const result = await apiRequest<AuthResponse>('/auth/register', {
         method: 'POST',
         body: JSON.stringify({ email, password, fullName }),
-      }),
-    login: (email: string, password: string) =>
-      apiRequest('/auth/login', {
+      });
+      rememberAuthProfile(result);
+      return result;
+    },
+    login: async (email: string, password: string) => {
+      const result = await apiRequest<AuthResponse>('/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email, password }),
-      }),
+      });
+      rememberAuthProfile(result);
+      return result;
+    },
     upgrade: () =>
       apiRequest('/auth/upgrade', {
         method: 'POST',
       }),
-    me: () => apiRequest('/auth/me'),
-    updateBudget: (carbonBudget: number) =>
-      apiRequest('/auth/budget', {
+    me: async () => {
+      try {
+        const result = await apiRequest<{ user: AuthProfile }>('/auth/me');
+        if (result.user) {
+          const token = getAuthToken();
+          if (typeof window !== 'undefined' && token) {
+            localStorage.setItem(getLocalAuthProfileKey(token), JSON.stringify(result.user));
+          }
+        }
+        return result;
+      } catch (err: any) {
+        const profile = readLocalAuthProfile();
+        if (err.message === 'User not found' && profile) {
+          return { user: profile };
+        }
+        throw err;
+      }
+    },
+    updateBudget: async (carbonBudget: number) => {
+      const result = await apiRequest('/auth/budget', {
         method: 'PUT',
         body: JSON.stringify({ carbonBudget }),
-      }),
+      });
+      const profile = readLocalAuthProfile();
+      if (profile && typeof window !== 'undefined') {
+        localStorage.setItem(getLocalAuthProfileKey(), JSON.stringify({ ...profile, carbonBudget }));
+      }
+      return result;
+    },
   },
   footprint: {
     submit: async (inputs: any) => {
@@ -164,17 +353,70 @@ export const api = {
     get: () => apiRequest('/predictions'),
   },
   goals: {
-    create: (goalData: any) =>
-      apiRequest('/goals', {
-        method: 'POST',
-        body: JSON.stringify(goalData),
-      }),
-    list: () => apiRequest('/goals'),
-    update: (id: string, currentValue: number) =>
-      apiRequest(`/goals/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify({ currentValue }),
-      }),
+    create: async (goalData: GoalInput) => {
+      try {
+        const result = await apiRequest<{ goal: StoredGoal }>('/goals', {
+          method: 'POST',
+          body: JSON.stringify(goalData),
+        });
+        writeLocalGoals(mergeGoals([result.goal], readLocalGoals()));
+        return result;
+      } catch (err: any) {
+        if (err.message === 'Unauthorized') {
+          throw err;
+        }
+        const goal = createLocalGoal(goalData);
+        writeLocalGoals(mergeGoals([goal], readLocalGoals()));
+        return { goal };
+      }
+    },
+    list: async () => {
+      const localGoals = readLocalGoals();
+      try {
+        const result = await apiRequest<{ goals: StoredGoal[] }>('/goals');
+        return {
+          ...result,
+          goals: mergeGoals(result.goals || [], localGoals),
+        };
+      } catch (err: any) {
+        if (err.message === 'Unauthorized' || localGoals.length === 0) {
+          throw err;
+        }
+        return { goals: localGoals };
+      }
+    },
+    update: async (id: string, currentValue: number) => {
+      try {
+        const result = await apiRequest(`/goals/${id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ currentValue }),
+        });
+        const localGoals = readLocalGoals().map((goal) =>
+          goal.id === id
+            ? {
+                ...goal,
+                currentValue,
+                status: currentValue <= goal.targetValue ? 'completed' as const : goal.status,
+              }
+            : goal
+        );
+        writeLocalGoals(localGoals);
+        return result;
+      } catch (err: any) {
+        if (err.message === 'Unauthorized') {
+          throw err;
+        }
+        const localGoals = readLocalGoals();
+        const goal = localGoals.find((item) => item.id === id);
+        if (!goal) {
+          throw err;
+        }
+        goal.currentValue = currentValue;
+        goal.status = currentValue <= goal.targetValue ? 'completed' : goal.status;
+        writeLocalGoals(localGoals);
+        return { message: 'Goal progress updated locally', status: goal.status, currentValue };
+      }
+    },
   },
   gamification: {
     getChallenges: () => apiRequest('/gamification/challenges'),

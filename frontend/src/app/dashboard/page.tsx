@@ -122,8 +122,13 @@ export default function DashboardPage() {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
-        const meRes = await api.auth.me();
-        setProfile(meRes.user);
+        try {
+          const meRes = await api.auth.me();
+          setProfile(meRes.user);
+        } catch (profileErr: unknown) {
+          console.warn('Profile lookup failed, using dashboard defaults:', profileErr);
+          setProfile({ carbonBudget: 400 });
+        }
 
         const histRes = await api.footprint.getHistory();
         const footprintHistory = histRes.history || [];
